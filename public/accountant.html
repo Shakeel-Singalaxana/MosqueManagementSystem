@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MMS - Accountant Dashboard</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        body {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 300px;
+            background-color: var(--card-bg);
+            border-right: 3px solid var(--accent-color);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .main-content {
+            flex: 1;
+            padding: 40px;
+            overflow-y: auto;
+            background-color: #0c0c0c;
+        }
+
+        .nav-item {
+            padding: 20px;
+            font-size: var(--font-size-large);
+            font-weight: bold;
+            color: var(--text-color);
+            text-decoration: none;
+            border-radius: 8px;
+            border: 2px solid transparent;
+        }
+
+        .nav-item:hover {
+            background-color: #333;
+            border-color: var(--accent-color);
+        }
+
+        .nav-item.active {
+            background-color: var(--accent-color);
+            color: #000;
+        }
+
+        .stat-card {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 48px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th,
+        td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 2px solid #333;
+            font-size: 20px;
+        }
+
+        th {
+            color: var(--accent-color);
+        }
+
+        .receipt-preview {
+            background: white;
+            color: black;
+            padding: 40px;
+            width: 500px;
+            margin: 0 auto;
+            border: 1px solid #ccc;
+            position: relative;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="sidebar no-print">
+        <h2 style="color: var(--accent-color); text-align: center; margin-bottom: 30px;">MMS MENU</h2>
+        <a href="#" class="nav-item active" onclick="loadView('dashboard', this)">DASHBOARD</a>
+        <a href="#" class="nav-item" onclick="loadView('members', this)">MEMBERS</a>
+        <a href="#" class="nav-item" onclick="loadView('finances', this)">FINANCES</a>
+        <a href="#" class="nav-item" onclick="loadView('receipts', this)">RECEIPTS</a>
+        <div style="margin-top: auto; padding: 20px;">
+            <button class="btn btn-danger" style="width: 100%;" onclick="logout()">LOGOUT</button>
+        </div>
+    </div>
+
+    <div class="main-content" id="app">
+        <!-- Views will be loaded here -->
+        <h1>Loading Dashboard...</h1>
+    </div>
+
+    <script src="js/accountant.js"></script>
+</body>
+
+</html>

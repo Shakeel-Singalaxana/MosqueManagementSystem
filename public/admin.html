@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MMS - Super Admin</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        .admin-grid {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 20px;
+            height: 100vh;
+        }
+
+        .sidebar {
+            background: #111;
+            padding: 20px;
+            border-right: 2px solid var(--accent-color);
+        }
+
+        .content {
+            padding: 40px;
+            overflow-y: auto;
+        }
+
+        .nav-btn {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #222;
+            color: #fff;
+            border: 1px solid #444;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .nav-btn:hover {
+            background: var(--accent-color);
+            color: #000;
+        }
+
+        /* Admin Table Enhancements */
+        .content table {
+            font-size: 18px;
+        }
+
+        .content th {
+            font-size: 20px;
+            padding: 18px 12px;
+        }
+
+        .content td {
+            padding: 16px 12px;
+            font-size: 18px;
+        }
+
+        .content td:first-child {
+            white-space: nowrap;
+        }
+
+        .content td:last-child {
+            font-size: 14px;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="admin-grid">
+        <div class="sidebar">
+            <h2 style="color: var(--accent-color)">SUPER ADMIN</h2>
+            <button class="nav-btn" onclick="renderSettings()">SETTINGS</button>
+            <button class="nav-btn" onclick="viewLogs()">TRANSACTION LOGS</button>
+            <button class="nav-btn" onclick="window.location.href='/accountant.html'">GO TO CASHIER VIEW</button>
+            <button class="btn btn-danger" style="margin-top: 50px; width:100%" onclick="logout()">LOGOUT</button>
+        </div>
+        <div class="content" id="adminContent">
+            <h1>Welcome, Admin</h1>
+            <p>Select an option from the sidebar to manage the system.</p>
+        </div>
+    </div>
+    <script>
+        const content = document.getElementById('adminContent');
+
+        async function renderSettings() {
+            const res = await fetch('/api/settings');
+            const settings = await res.json();
+            content.innerHTML = `
+                <h1>System Settings</h1>
+                <div class="card">
+                    <div class="form-group">
+                        <label>Mosque Name</label>
+                        <input type="text" value="${settings.mosque_name}" id="set_name">
+                    </div>
+                    <button class="btn btn-primary">SAVE SETTINGS (Disabled in Demo)</button>
+                </div>
+            `;
+        }
+
+        async function viewLogs() {
+            const res = await fetch('/api/transactions');
+            const logs = await res.json();
+
+            if (!Array.isArray(logs)) {
+                content.innerHTML = `<h1>Error: ${logs.error || 'Failed to load logs'}</h1>`;
+                return;
+            }
+
+            content.innerHTML = `
+                <h1>Full Transaction Audit</h1>
+                <div class="card">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Category</th>
+                                <th>Amount</th>
+                                <th>Member</th>
+                                <th>Hash</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${logs.length === 0 ? '<tr><td colspan="6">No transactions found.</td></tr>' : logs.map(l => `
+                                <tr>
+                                    <td>${new Date(l.timestamp).toLocaleString()}</td>
+                                    <td style="color: ${l.type === 'income' ? 'var(--success-color)' : 'var(--danger-color)'}; font-weight: bold;">
+                                        ${l.type.toUpperCase()}
+                                    </td>
+                                    <td>${l.category.replace('_', ' ').toUpperCase()}</td>
+                                    <td style="color: ${l.type === 'income' ? 'var(--success-color)' : 'var(--danger-color)'}; font-weight: bold;">
+                                        ${l.type === 'income' ? '+' : '-'}Rs. ${parseFloat(l.amount).toFixed(2)}
+                                    </td>
+                                    <td>${l.member_name || l.member_id || '-'}</td>
+                                    <td style="font-family: monospace; font-size: 14px; color: #888;">${l.verified_hash}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function logout() {
+            await fetch('/api/logout', { method: 'POST' });
+            window.location.href = '/';
+        }
+    </script>
+</body>
+
+</html>
