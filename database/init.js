@@ -18,8 +18,7 @@ db.exec(`
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
         role TEXT CHECK(role IN ('super_admin', 'accountant')) NOT NULL,
-        full_name TEXT,
-        synced INTEGER DEFAULT 0
+        full_name TEXT
     );
 
     CREATE TABLE IF NOT EXISTS members (
@@ -28,8 +27,7 @@ db.exec(`
         name TEXT NOT NULL,
         address TEXT,
         contact TEXT,
-        registration_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-        synced INTEGER DEFAULT 0
+        registration_date DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS transactions (
@@ -42,66 +40,20 @@ db.exec(`
         description TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         verified_hash TEXT,
-        synced INTEGER DEFAULT 0,
         FOREIGN KEY (member_id) REFERENCES members(member_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS distributions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        distribution_id TEXT UNIQUE,
-        member_id TEXT NOT NULL,
-        amount REAL,
-        distribution_type TEXT NOT NULL,
-        year INTEGER NOT NULL,
-        notes TEXT,
-        received_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-        synced INTEGER DEFAULT 0,
-        FOREIGN KEY (member_id) REFERENCES members(member_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS member_payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        member_id TEXT NOT NULL,
-        amount REAL NOT NULL,
-        month TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        paid_date DATETIME,
-        transaction_id TEXT,
-        synced INTEGER DEFAULT 0,
-        FOREIGN KEY (member_id) REFERENCES members(member_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS bills (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        bill_type TEXT NOT NULL,
-        description TEXT,
-        amount REAL NOT NULL,
-        due_date TEXT,
-        status TEXT DEFAULT 'pending',
-        paid_date DATETIME,
-        transaction_id TEXT,
-        synced INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
-        value TEXT,
-        synced INTEGER DEFAULT 0
+        value TEXT
     );
 `);
 
-// Insert essential settings required by server.js (Only if they don't exist)
-const upsertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
+// Insert default settings
+const upsertSetting = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
 upsertSetting.run('mosque_name', 'Central Mosque');
-upsertSetting.run('sync_interval', '5'); // Default 5 seconds
-upsertSetting.run('sync_enabled', '1'); // Default enabled
-upsertSetting.run('monthly_membership_fee', '500.00'); // CRITICAL: Dashboard needs this
 upsertSetting.run('maintenance_threshold', '500.00');
-upsertSetting.run('logo_path', '/assets/img/logo.png');
-upsertSetting.run('mosque_address', '');
-upsertSetting.run('mosque_phone', '');
-upsertSetting.run('mosque_email', '');
-upsertSetting.run('mysql_config', '');
+upsertSetting.run('logo_path', '/assets/logo-placeholder.png');
 
 // Insert default users (In a real app, passwords should be hashed)
 const insertUser = db.prepare('INSERT OR IGNORE INTO users (username, password, role, full_name) VALUES (?, ?, ?, ?)');

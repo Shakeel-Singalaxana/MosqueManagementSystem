@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MMS - Live Display</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        body {
+            overflow: hidden;
+            background: linear-gradient(135deg, #000 0%, #111 100%);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .prayer-container {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            padding: 40px;
+            align-content: center;
+        }
+
+        .prayer-card {
+            background: rgba(40, 40, 40, 0.8);
+            border: 2px solid var(--accent-color);
+            padding: 30px;
+            text-align: center;
+            border-radius: 15px;
+        }
+
+        .prayer-name {
+            font-size: 32px;
+            color: var(--accent-color);
+            font-weight: bold;
+        }
+
+        .prayer-time {
+            font-size: 64px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        .marquee {
+            height: 80px;
+            background: var(--accent-color);
+            color: #000;
+            display: flex;
+            align-items: center;
+            overflow: hidden;
+            font-size: var(--font-size-xl);
+            font-weight: bold;
+        }
+
+        .marquee-content {
+            display: flex;
+            animation: marquee 30s linear infinite;
+            white-space: nowrap;
+        }
+
+        @keyframes marquee {
+            0% {
+                transform: translateX(100%);
+            }
+
+            100% {
+                transform: translateX(-100%);
+            }
+        }
+
+        .header {
+            padding: 20px;
+            text-align: center;
+            border-bottom: 2px solid var(--accent-color);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1 id="mosqueName">LOADING...</h1>
+        <h2 id="currentTime"></h2>
+    </div>
+
+    <div class="prayer-container" id="prayerTimes">
+        <!-- Times will be injected here -->
+    </div>
+
+    <div class="marquee">
+        <div class="marquee-content" id="donorList">
+            Jazakallah to our donors: Anonymous - $50 | Brother Yusuf - $100 | Sister Fatima - $200 | Friday Collection
+            - $1500 |
+        </div>
+    </div>
+
+    <script>
+        async function fetchTimes() {
+            try {
+                const res = await fetch('/api/prayer-times');
+                const data = await res.json();
+                const timings = data.data.timings;
+                const relevant = ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha', 'Sunrise'];
+
+                const container = document.getElementById('prayerTimes');
+                container.innerHTML = relevant.map(p => `
+                    <div class="prayer-card">
+                        <div class="prayer-name">${p.toUpperCase()}</div>
+                        <div class="prayer-time">${timings[p]}</div>
+                    </div>
+                `).join('');
+            } catch (e) { console.error(e); }
+        }
+
+        async function fetchDonors() {
+            try {
+                const res = await fetch('/api/live/donors');
+                const donors = await res.json();
+                if (donors.length > 0) {
+                    const text = donors.map(d => `${d.member_id || 'Anonymous'} - $${d.amount}`).join(' | ');
+                    document.getElementById('donorList').innerText = 'Recent Donations: ' + text + ' | ' + document.getElementById('donorList').innerText;
+                }
+            } catch (e) { }
+        }
+
+        async function init() {
+            try {
+                const res = await fetch('/api/settings');
+                const s = await res.json();
+                document.getElementById('mosqueName').innerText = s.mosque_name || 'Central Mosque';
+            } catch (e) {
+                document.getElementById('mosqueName').innerText = 'Central Mosque';
+            }
+
+            setInterval(() => {
+                document.getElementById('currentTime').innerText = new Date().toLocaleTimeString();
+            }, 1000);
+
+            fetchTimes();
+            fetchDonors();
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

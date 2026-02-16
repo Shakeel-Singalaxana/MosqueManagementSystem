@@ -1,236 +1,74 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MMS - Live Display</title>
+    <title>MMS - Login</title>
     <link rel="stylesheet" href="css/style.css">
     <style>
-        body {
-            overflow: hidden;
-            background: linear-gradient(135deg, #000 0%, #111 100%);
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-
-        .prayer-container {
-            flex: 1;
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
-            padding: 40px;
-            align-content: center;
-        }
-
-        .prayer-card {
-            background: rgba(40, 40, 40, 0.8);
-            border: 2px solid var(--accent-color);
-            padding: 20px;
-            text-align: center;
-            border-radius: 15px;
-        }
-
-        .prayer-name {
-            font-size: 32px;
-            color: var(--accent-color);
+        .error-message {
+            color: var(--danger-color);
             font-weight: bold;
-        }
-
-        .prayer-time {
-            font-size: 64px;
-            font-weight: bold;
-            margin-top: 10px;
-        }
-
-        .marquee {
-            height: 80px;
-            background: var(--accent-color);
-            color: #000;
-            display: flex;
-            align-items: center;
-            overflow: hidden;
-            font-size: var(--font-size-xl);
-            font-weight: bold;
-        }
-
-        .marquee-content {
-            display: flex;
-            animation: marquee 30s linear infinite;
-            white-space: nowrap;
-        }
-
-        @keyframes marquee {
-            0% {
-                transform: translateX(100%);
-            }
-
-            100% {
-                transform: translateX(-100%);
-            }
-        }
-
-        .prayer-card.upcoming {
-            border-color: #2ecc71;
-            background: rgba(46, 204, 113, 0.15);
-            box-shadow: 0 0 20px rgba(46, 204, 113, 0.3);
-            transform: scale(1.05);
-        }
-
-        .prayer-card.current {
-            border-color: #e74c3c;
-            background: rgba(231, 76, 60, 0.15);
-            box-shadow: 0 0 20px rgba(231, 76, 60, 0.3);
-        }
-
-        .header {
-            padding: 10px;
-            text-align: center;
-            border-bottom: 2px solid var(--accent-color);
+            margin-bottom: 15px;
+            display: none;
         }
     </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-box card">
+            <h1 style="text-align: center;">Mosque Management System</h1>
+            <h2 style="text-align: center; color: var(--text-color);">Portal Login</h2>
+            
+            <div id="error" class="error-message">Invalid username or password. Please try again.</div>
+
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px;">SIGN IN</button>
+            </form>
+
+            <div style="margin-top: 30px; text-align: center;">
+                <a href="/live.html" style="color: var(--accent-color); font-size: var(--font-size-base);">Open Live Display (Public)</a>
+            </div>
+        </div>
+    </div>
+
     <script>
-        document.addEventListener('click', () => {
-            window.location.href = '/login.html';
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('error');
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    if (data.user.role === 'super_admin') {
+                        window.location.href = '/admin.html';
+                    } else {
+                        window.location.href = '/accountant.html';
+                    }
+                } else {
+                    errorDiv.style.display = 'block';
+                }
+            } catch (err) {
+                errorDiv.innerText = 'Network error. Please check your connection.';
+                errorDiv.style.display = 'block';
+            }
         });
     </script>
-</head>
-
-<body>
-    <div class="branded-header" id="mainHeader"
-        style="border-bottom: 2px solid var(--accent-color); padding: 20px 60px;">
-        <div class="brand-section">
-            <img src="/assets/logo-placeholder.png" alt="Mosque Logo" class="mosque-logo" id="mosqueLogo"
-                style="height: 100px; width: 100px;">
-            <div class="mosque-info" style="text-align: left;">
-                <h1 id="mosqueName" style="font-size: 42px; margin: 0;">LOADING...</h1>
-                <div class="mosque-detail-text" id="mosqueDetails" style="font-size: 18px; color: #aaa;">...</div>
-            </div>
-        </div>
-        <div class="header-controls">
-            <div style="text-align: right;">
-                <h2 id="currentTime" style="font-size: 48px; margin: 0; color: #fff;"></h2>
-                <div style="font-size: 14px; color: rgba(255,255,255,0.3); margin-top: 5px;">
-                    System by shakbrotech
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="prayer-container" id="prayerTimes">
-        <!-- Times will be injected here -->
-    </div>
-
-    <div class="marquee">
-        <div class="marquee-content" id="donorList">
-            Jazakallah to our donors: Anonymous - $50 | Brother Yusuf - $100 | Sister Fatima - $200 | Friday Collection
-            - $1500 |
-        </div>
-    </div>
-
-    <script>
-        function timeToMinutes(timeStr) {
-            const [hours, minutes] = timeStr.split(':').map(Number);
-            return hours * 60 + minutes;
-        }
-
-        async function fetchTimes() {
-            try {
-                const res = await fetch('/api/prayer-times');
-                const data = await res.json();
-                const timings = data.data.timings;
-                const relevant = ['Fajr', 'Sunrise', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
-
-                const now = new Date();
-                const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-                let currentIdx = -1;
-                let nextIdx = -1;
-
-                // Find current and next prayer
-                for (let i = 0; i < relevant.length; i++) {
-                    const prayerMinutes = timeToMinutes(timings[relevant[i]]);
-                    if (currentMinutes >= prayerMinutes) {
-                        currentIdx = i;
-                    } else {
-                        nextIdx = i;
-                        break;
-                    }
-                }
-
-                // Wrap around for Isha/Fajr next day
-                if (nextIdx === -1) nextIdx = 0;
-                if (currentIdx === -1) currentIdx = 5; // Isha from previous day
-
-                const container = document.getElementById('prayerTimes');
-                container.innerHTML = relevant.map((p, idx) => {
-                    let statusClass = '';
-                    if (idx === nextIdx) statusClass = 'upcoming';
-                    else if (idx === currentIdx) statusClass = 'current';
-
-                    return `
-                        <div class="prayer-card ${statusClass}">
-                            <div class="prayer-name">${p.toUpperCase()}</div>
-                            <div class="prayer-time">${timings[p]}</div>
-                        </div>
-                    `;
-                }).join('');
-            } catch (e) { console.error(e); }
-        }
-
-        async function fetchDonors() {
-            try {
-                const res = await fetch('/api/live/donors');
-                const data = await res.json();
-
-                let donorText = "Jazakallah to our donors: ";
-
-                if (data.donors && data.donors.length > 0) {
-                    donorText += data.donors.map(d => `${d.donor_name} - Rs.${d.amount}`).join(' | ');
-                }
-
-                if (data.fridayCollection) {
-                    donorText += ` | Last Friday Collection: Rs.${data.fridayCollection.amount}`;
-                }
-
-                document.getElementById('donorList').innerText = donorText + " | ";
-            } catch (e) { console.error(e); }
-        }
-
-        async function init() {
-            try {
-                const res = await fetch('/api/settings');
-                const s = await res.json();
-                if (s.mosque_name) document.getElementById('mosqueName').innerText = s.mosque_name;
-                document.getElementById('mosqueLogo').src = s.logo_path || '/assets/img/logo.png';
-                if (s.mosque_address || s.mosque_phone) {
-                    const details = [];
-                    if (s.mosque_phone) details.push(`Tel: ${s.mosque_phone}`);
-                    if (s.mosque_address) details.push(s.mosque_address);
-                    document.getElementById('mosqueDetails').innerText = details.join(' | ');
-                }
-            } catch (e) {
-                console.error('Branding load failed');
-            }
-
-            setInterval(() => {
-                // Sri Lankan Time (UTC +5:30)
-                const options = { timeZone: 'Asia/Colombo', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
-                document.getElementById('currentTime').innerText = new Date().toLocaleTimeString('en-US', options);
-            }, 1000);
-
-            fetchTimes();
-            fetchDonors();
-
-            // Refresh times every minute
-            setInterval(fetchTimes, 60000);
-            // Refresh donors every 5 minutes
-            setInterval(fetchDonors, 300000);
-        }
-
-        init();
-    </script>
 </body>
-
 </html>

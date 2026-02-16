@@ -9,14 +9,7 @@
     <style>
         body {
             display: flex;
-            flex-direction: column;
             height: 100vh;
-            overflow: hidden;
-        }
-
-        .dashboard-wrapper {
-            display: flex;
-            flex: 1;
             overflow: hidden;
         }
 
@@ -27,8 +20,7 @@
             padding: 20px;
             display: flex;
             flex-direction: column;
-            overflow-y: auto;
-            max-height: 100vh;
+            gap: 15px;
         }
 
         .main-content {
@@ -39,7 +31,7 @@
         }
 
         .nav-item {
-            padding: 10px;
+            padding: 20px;
             font-size: var(--font-size-large);
             font-weight: bold;
             color: var(--text-color);
@@ -105,54 +97,22 @@
 </head>
 
 <body>
-    <div class="branded-header" id="mainHeader">
-        <div class="brand-section">
-            <img src="/assets/logo-placeholder.png" alt="Mosque Logo" class="mosque-logo" id="headerLogo">
-            <div class="mosque-info">
-                <h1 id="headerMosqueName">Loading...</h1>
-                <div class="mosque-detail-text" id="headerDetails">...</div>
-            </div>
-        </div>
-        <div class="header-controls">
-            <div class="db-status" id="dbStatus" onclick="triggerSync()" style="cursor: pointer;"
-                title="Click to forced sync">
-                <div class="status-dot" id="dbStatusDot"></div>
-                <span id="dbStatusText">Checking DB...</span>
-            </div>
-        </div>
-    </div>
-    <div class="dashboard-wrapper">
-        <div class="sidebar no-print">
-            <h2 style="color: var(--accent-color); text-align: center; margin-bottom: 30px;">MMS MENU</h2>
-            <a href="#" class="nav-item active" onclick="loadView('dashboard', this)">DASHBOARD</a>
-            <a href="#" class="nav-item" onclick="loadView('members', this)">MEMBERS</a>
-            <a href="#" class="nav-item" onclick="loadView('finances', this)">FINANCES</a>
-            <a href="#" class="nav-item" onclick="loadView('bills', this)">BILLS</a>
-            <a href="#" class="nav-item" onclick="loadView('distributions', this)">DISTRIBUTIONS</a>
-            <a href="#" class="nav-item" onclick="loadView('receipts', this)">RECEIPTS</a>
-            <a href="#" class="nav-item" onclick="loadView('password', this)">PASSWORD</a>
-            <div style="margin-top: auto; padding: 20px;">
-                <button class="btn btn-danger" style="width: 100%;" onclick="logout()">LOGOUT</button>
-                <div class="developer-footer" style="border: none; padding: 10px 0 0 0;">
-                    <p style="font-size: 12px;">&copy; 2026 ShakBrotech</p>
-                    <p style="font-size: 11px;">
-                        <a href="https://github.com/Shakeel-Singalaxana/MosqueManagementSystem"
-                            target="_blank">GitHub</a> |
-                        <a href="mailto:shefazslaxana@outlook.com">Email</a>
-                    </p>
-                </div>
-            </div>
-        </div>
-
-        <div class="main-content">
-            <div id="app">
-                <!-- Views will be loaded here -->
-                <h1>Loading Dashboard...</h1>
-            </div>
+    <div class="sidebar no-print">
+        <h2 style="color: var(--accent-color); text-align: center; margin-bottom: 30px;">MMS MENU</h2>
+        <a href="#" class="nav-item active" onclick="loadView('dashboard', this)">DASHBOARD</a>
+        <a href="#" class="nav-item" onclick="loadView('members', this)">MEMBERS</a>
+        <a href="#" class="nav-item" onclick="loadView('finances', this)">FINANCES</a>
+        <a href="#" class="nav-item" onclick="loadView('receipts', this)">RECEIPTS</a>
+        <div style="margin-top: auto; padding: 20px;">
+            <button class="btn btn-danger" style="width: 100%;" onclick="logout()">LOGOUT</button>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+    <div class="main-content" id="app">
+        <!-- Views will be loaded here -->
+        <h1>Loading Dashboard...</h1>
+    </div>
+
     <script src="js/accountant.js"></script>
 </body>
 
