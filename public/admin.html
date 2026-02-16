@@ -7,17 +7,26 @@
     <title>MMS - Super Admin</title>
     <link rel="stylesheet" href="css/style.css">
     <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
         .admin-grid {
             display: grid;
             grid-template-columns: 300px 1fr;
-            gap: 20px;
-            height: 100vh;
+            flex: 1;
+            overflow: hidden;
         }
 
         .sidebar {
             background: #111;
             padding: 20px;
             border-right: 2px solid var(--accent-color);
+            overflow-y: auto;
+            max-height: 100vh;
         }
 
         .content {
@@ -67,21 +76,76 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
+        /* Database Status indicator */
+        .db-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            background: #111;
+            padding: 5px 15px;
+            border-radius: 20px;
+            border: 1px solid #333;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #888;
+        }
+
+        .status-dot.connected {
+            background: var(--success-color);
+            box-shadow: 0 0 10px var(--success-color);
+        }
+
+        .status-dot.error {
+            background: var(--danger-color);
+            box-shadow: 0 0 10px var(--danger-color);
+        }
     </style>
 </head>
 
 <body>
+    <div class="branded-header" id="mainHeader">
+        <div class="brand-section">
+            <img src="/assets/img/logo.png" alt="Mosque Logo" class="mosque-logo" id="headerLogo">
+            <div class="mosque-info">
+                <h1 id="headerMosqueName">Loading...</h1>
+                <div class="mosque-detail-text" id="headerDetails">...</div>
+            </div>
+        </div>
+        <div class="header-controls">
+            <div class="db-status" id="dbStatus" onclick="triggerSync()" style="cursor: pointer;"
+                title="Click to forced sync">
+                <div class="status-dot" id="dbStatusDot"></div>
+                <span id="dbStatusText">Checking DB...</span>
+            </div>
+        </div>
+    </div>
     <div class="admin-grid">
         <div class="sidebar">
             <h2 style="color: var(--accent-color)">SUPER ADMIN</h2>
             <button class="nav-btn" onclick="renderSettings()">SETTINGS</button>
             <button class="nav-btn" onclick="viewLogs()">TRANSACTION LOGS</button>
+            <button class="nav-btn" onclick="renderTools()">AUDITOR'S TOOLBOX</button>
+            <button class="nav-btn" onclick="renderDatabase()">DATABASE</button>
+            <button class="nav-btn" onclick="renderPasswordChange()">CHANGE PASSWORD</button>
             <button class="nav-btn" onclick="window.location.href='/accountant.html'">GO TO CASHIER VIEW</button>
             <button class="btn btn-danger" style="margin-top: 50px; width:100%" onclick="logout()">LOGOUT</button>
+            <div class="developer-footer" style="border: none; margin-top: 40px; padding: 10px;">
+                <p style="font-size: 12px;">&copy; 2026 ShakBrotech</p>
+                <p style="font-size: 11px;">
+                    <a href="https://github.com/Shakeel-Singalaxana/MosqueManagementSystem" target="_blank">GitHub</a> |
+                    <a href="mailto:shefazslaxana@outlook.com">Contact</a>
+                </p>
+            </div>
         </div>
         <div class="content" id="adminContent">
-            <h1>Welcome, Admin</h1>
-            <p>Select an option from the sidebar to manage the system.</p>
+            <h1>Welcome back!</h1>
+            <p>Select a module from the sidebar to begin.</p>
         </div>
     </div>
     <script>
@@ -91,13 +155,46 @@
             const res = await fetch('/api/settings');
             const settings = await res.json();
             content.innerHTML = `
-                <h1>System Settings</h1>
+                <h1>Mosque Branding & Settings</h1>
                 <div class="card">
+                    <h3>General Settings</h3>
                     <div class="form-group">
                         <label>Mosque Name</label>
-                        <input type="text" value="${settings.mosque_name}" id="set_name">
+                        <input type="text" value="${settings.mosque_name || ''}" id="set_name">
                     </div>
-                    <button class="btn btn-primary">SAVE SETTINGS (Disabled in Demo)</button>
+                    <div class="form-group">
+                        <label>Monthly Membership Fee (Rs.)</label>
+                        <input type="number" value="${settings.monthly_membership_fee || '500'}" id="set_fee">
+                    </div>
+                    <hr style="margin: 20px 0; border: 1px solid #333;">
+                    <h3>Branding Details</h3>
+                    <div class="grid-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <div class="form-group">
+                            <label>Telephone Number</label>
+                            <input type="text" value="${settings.mosque_phone || ''}" id="set_phone" placeholder="e.g. +94 11 234 5678">
+                        </div>
+                        <div class="form-group">
+                            <label>Email Address</label>
+                            <input type="email" value="${settings.mosque_email || ''}" id="set_email" placeholder="e.g. info@mosque.com">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Address</label>
+                        <textarea id="set_address" rows="2" placeholder="e.g. 123 Mosque Road, Colombo 10">${settings.mosque_address || ''}</textarea>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveSettings()">SAVE SETTINGS</button>
+                </div>
+
+                <div class="card">
+                    <h3>Mosque Logo</h3>
+                    <div style="display: flex; gap: 30px; align-items: center;">
+                        <img src="${settings.logo_path || '/assets/img/logo.png'}" id="logoPreview" style="height: 120px; width: 120px; object-fit: contain; background: #222; padding: 10px; border-radius: 8px; border: 1px solid #444;">
+                        <div style="flex: 1;">
+                            <p style="color: #888; margin-bottom: 15px;">Select a high-quality logo image (PNG/JPG).</p>
+                            <input type="file" id="logoUpload" accept="image/*" style="margin-bottom: 15px;">
+                            <button class="btn btn-success" onclick="uploadLogo()">UPLOAD LOGO</button>
+                        </div>
+                    </div>
                 </div>
             `;
         }
@@ -112,8 +209,12 @@
             }
 
             content.innerHTML = `
-                <h1>Full Transaction Audit</h1>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
+                    <h1>Full Transaction Audit</h1>
+                    <button class="btn btn-success" onclick="window.location.href='/api/transactions/export'">EXPORT EXCEL</button>
+                </div>
                 <div class="card">
+                    <!-- ... table ... -->
                     <table>
                         <thead>
                             <tr>
@@ -137,7 +238,9 @@
                                         ${l.type === 'income' ? '+' : '-'}Rs. ${parseFloat(l.amount).toFixed(2)}
                                     </td>
                                     <td>${l.member_name || l.member_id || '-'}</td>
-                                    <td style="font-family: monospace; font-size: 14px; color: #888;">${l.verified_hash}</td>
+                                    <td>
+                                        <button class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;" onclick="revertTransaction('${l.receipt_id}', '${l.amount}')">REVERT</button>
+                                    </td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -146,10 +249,501 @@
             `;
         }
 
+        async function renderTools() {
+            content.innerHTML = `
+                <h1>Auditor's Toolbox</h1>
+                <div class="card">
+                    <h3>Transaction Integrity</h3>
+                    <p style="color: #888; margin-bottom: 20px;">Verify that all transactions in the database are valid and have not been tampered with.</p>
+                    <button class="btn btn-primary" onclick="runIntegrityCheck()">RUN INTEGRITY CHECK</button>
+                    <div id="integrityResult" style="margin-top: 20px;"></div>
+                </div>
+                
+                <div class="card" style="margin-top: 25px;">
+                    <h3>Data Exports</h3>
+                    <p style="color: #888; margin-bottom: 20px;">Download direct reports for committee review.</p>
+                    <button class="btn btn-success" onclick="window.location.href='/api/transactions/export'">EXPORT FULL AUDIT (EXCEL)</button>
+                    <button class="btn btn-success" onclick="window.location.href='/api/members/export'">EXPORT MEMBERSHIP AUDIT (EXCEL)</button>
+                </div>
+            `;
+        }
+
+        async function runIntegrityCheck() {
+            const btn = event.target;
+            const resultDiv = document.getElementById('integrityResult');
+            btn.disabled = true;
+            btn.innerText = 'VERIFYING...';
+
+            try {
+                const res = await fetch('/api/audit/integrity-check');
+                const data = await res.json();
+
+                if (data.mismatch_count === 0) {
+                    resultDiv.innerHTML = `
+                        <div class="card" style="background: rgba(46, 204, 113, 0.1); border-color: var(--success-color);">
+                            <h4 style="color: var(--success-color); margin: 0;">✓ INTEGRITY VERIFIED</h4>
+                            <p style="margin: 10px 0 0 0;">All ${data.total_verified} transactions matched their security hashes perfectly.</p>
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="card" style="background: rgba(231, 76, 60, 0.1); border-color: var(--danger-color);">
+                            <h4 style="color: var(--danger-color); margin: 0;">⚠ INTEGRITY ALARM</h4>
+                            <p style="margin: 10px 0 0 0;">Detected ${data.mismatch_count} discrepancies out of ${data.total_verified} records!</p>
+                            <ul style="margin-top: 15px; font-size: 14px; text-align: left;">
+                                ${data.issues.map(i => `<li><b>${i.receipt_id}</b>: Hash mismatch (Recorded: ${i.stored} vs Computed: ${i.expected})</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                alert('Verification failed.');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'RUN INTEGRITY CHECK';
+            }
+        }
+
+        async function revertTransaction(id, amount) {
+            const reason = prompt('Please enter the reason for reversal:');
+            if (!reason) return;
+
+            // Security Check: Math Captcha
+            const num1 = Math.floor(Math.random() * 10) + 1;
+            const num2 = Math.floor(Math.random() * 10) + 1;
+            const answer = prompt(`SECURITY VERIFICATION: What is ${num1} + ${num2}?`);
+
+            if (parseInt(answer) !== (num1 + num2)) {
+                alert('Verification failed! Reversal cancelled.');
+                return;
+            }
+
+            if (!confirm(`Are you absolutely sure you want to REVERT transaction ${id} (Rs. ${amount})?\nThis will create a counter-transaction for auditing.`)) return;
+
+            try {
+                const res = await fetch(`/api/transactions/${id}/revert`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    alert('Transaction reverted successfully!');
+                    printReversal(id, amount, reason, data.reversal_receipt);
+                    viewLogs();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                alert('Connection failed.');
+            }
+        }
+
+        async function printReversal(originalId, amount, reason, newId) {
+            const setRes = await fetch('/api/settings');
+            const settings = await setRes.json();
+
+            const printWin = window.open('', '', 'width=600,height=800');
+            printWin.document.write(`
+                <html>
+                <head>
+                    <title>Cancellation Memo - ${originalId}</title>
+                    <style>
+                        body { font-family: sans-serif; padding: 40px; text-align: center; }
+                        .memo-box { border: 5px solid #e74c3c; padding: 30px; position: relative; }
+                        .memo-header { margin-bottom: 20px; border-bottom: 2px solid #e74c3c; padding-bottom: 15px; }
+                        .memo-logo { height: 70px; width: 70px; object-fit: contain; }
+                        h1 { color: #e74c3c; margin: 5px 0; }
+                        .amount { font-size: 40px; font-weight: bold; margin: 20px 0; color: #e74c3c; }
+                        .details { text-align: left; margin-top: 30px; line-height: 1.6; }
+                    </style>
+                </head>
+                <body onload="window.print(); window.close();">
+                    <div class="memo-box">
+                        <div class="memo-header">
+                            <img src="${settings.logo_path || '/assets/logo-placeholder.png'}" class="memo-logo">
+                            <h2>${settings.mosque_name || 'MOSQUE MANAGEMENT SYSTEM'}</h2>
+                        </div>
+                        <h1>TRANSACTION CANCELLATION</h1>
+                        <p>OFFICIAL AUDIT MEMO</p>
+                        <hr>
+                        <div class="amount">Rs. ${amount}</div>
+                        <div class="details">
+                            <p><strong>Original Receipt ID:</strong> ${originalId}</p>
+                            <p><strong>Reversal Receipt ID:</strong> ${newId}</p>
+                            <p><strong>Cancellation Date:</strong> ${new Date().toLocaleString()}</p>
+                            <p><strong>Reason for Cancellation:</strong> ${reason}</p>
+                            <p><strong>Authorized By:</strong> Super Admin</p>
+                        </div>
+                        <p style="margin-top: 40px; font-weight: bold; border-top: 1px solid #ddd; padding-top: 20px;">
+                            This document serves as proof of transaction reversal in the Mosque Management System.
+                        </p>
+                        <div class="developer-credits">
+                            <p>&copy; 2026 ShakBrotech</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+            `);
+            printWin.document.close();
+        }
+
+        async function uploadLogo() {
+            const fileInput = document.getElementById('logoUpload');
+            if (!fileInput.files[0]) return alert('Please select a file.');
+
+            const formData = new FormData();
+            formData.append('logo', fileInput.files[0]);
+
+            try {
+                const res = await fetch('/api/settings/logo', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Logo uploaded successfully!');
+                    document.getElementById('logoPreview').src = data.logo_path;
+                    checkDBStatus(); // Update header logo
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) { alert('Upload failed.'); }
+        }
+
+        async function saveSettings() {
+            const payload = {
+                mosque_name: document.getElementById('set_name').value,
+                monthly_membership_fee: document.getElementById('set_fee').value,
+                mosque_phone: document.getElementById('set_phone').value,
+                mosque_email: document.getElementById('set_email').value,
+                mosque_address: document.getElementById('set_address').value
+            };
+
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Settings updated successfully!');
+                    checkDBStatus(); // Update header
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                alert('Connection failed.');
+            }
+        }
+
         async function logout() {
             await fetch('/api/logout', { method: 'POST' });
             window.location.href = '/';
         }
+
+        async function checkDBStatus() {
+            const dot = document.getElementById('dbStatusDot');
+            const text = document.getElementById('dbStatusText');
+            const headerName = document.getElementById('headerMosqueName');
+            const headerLogo = document.getElementById('headerLogo');
+            const headerDetails = document.getElementById('headerDetails');
+            if (!dot || !text) return;
+
+            try {
+                // Fetch settings for Mosque Branding
+                const setRes = await fetch('/api/settings');
+                const settings = await setRes.json();
+
+                if (headerName) headerName.innerText = settings.mosque_name || 'MOSQUE MANAGEMENT SYSTEM';
+                if (headerLogo) headerLogo.src = settings.logo_path || '/assets/img/logo.png';
+                if (headerDetails) {
+                    const details = [];
+                    if (settings.mosque_phone) details.push(`Tel: ${settings.mosque_phone}`);
+                    if (settings.mosque_address) details.push(settings.mosque_address);
+                    headerDetails.innerText = details.join(' | ');
+                }
+
+                // Fetch Sync Status instead of just DB Status
+                const res = await fetch('/api/sync/status');
+                if (!res.ok) throw new Error('API Error');
+                const sync = await res.json();
+
+                if (!sync.enabled) {
+                    dot.className = 'status-dot';
+                    dot.style.background = '#666';
+                    dot.style.boxShadow = 'none';
+                    text.innerText = 'Sync Disabled';
+                } else if (sync.status === 'syncing') {
+                    dot.className = 'status-dot';
+                    dot.style.background = 'var(--accent-color)';
+                    dot.style.boxShadow = '0 0 10px var(--accent-color)';
+                    text.innerText = `Syncing... (${sync.pendingCount} pending)`;
+                } else if (sync.error) {
+                    dot.className = 'status-dot connected';
+                    dot.style.background = '';
+                    dot.style.boxShadow = '';
+                    text.innerHTML = `Running on Local DB <small style="color:#888" title="${sync.error}">(Offline)</small>`;
+                    if (sync.pendingCount > 0) text.innerHTML += ` <span style="font-size:10px">(${sync.pendingCount} pending)</span>`;
+                } else {
+                    dot.className = 'status-dot connected';
+                    dot.style.background = '';
+                    dot.style.boxShadow = '';
+                    text.innerText = sync.pendingCount > 0 ? `Local Active (${sync.pendingCount} pending)` : 'Database Synced';
+                }
+            } catch (err) {
+                dot.className = 'status-dot error';
+                text.innerText = 'Server Offline';
+                console.error('Status check failed:', err);
+            }
+        }
+
+        async function triggerSync() {
+            const text = document.getElementById('dbStatusText');
+            const oldText = text.innerText;
+            text.innerText = 'Triggering Sync...';
+            try {
+                const res = await fetch('/api/sync/trigger', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    checkDBStatus();
+                } else {
+                    alert('Sync Trigger failed: ' + data.error);
+                    text.innerText = oldText;
+                }
+            } catch (err) {
+                alert('Connection failed.');
+                text.innerText = oldText;
+            }
+        }
+
+        async function renderDatabase() {
+            const [statusRes, setRes] = await Promise.all([
+                fetch('/api/database/status'),
+                fetch('/api/settings')
+            ]);
+            const status = await statusRes.json();
+            const settings = await setRes.json();
+
+            content.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h1>Database Management</h1>
+                    <div class="db-status">
+                        <div class="status-dot ${status.sqlite === 'connected' ? 'connected' : 'error'}"></div>
+                        <span>SQLITE: ${status.sqlite.toUpperCase()}</span>
+                    </div>
+                </div>
+
+                <div class="grid-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+                    <div class="card">
+                        <h3>Local SQLite Backup</h3>
+                        <p style="color: #888; margin-bottom: 20px;">Download the current database file to your computer for safe keeping.</p>
+                        <button class="btn btn-primary" style="width: 100%" onclick="window.location.href='/api/database/backup'">DOWNLOAD DATABASE (.sqlite)</button>
+                    </div>
+
+                    <div class="card">
+                        <h3>Remote MySQL Connection</h3>
+                        <p style="color: #888; margin-bottom: 20px;">Connect to a database hosted across the internet.</p>
+                        <form id="mysqlForm" onsubmit="saveMySQLConfig(event)">
+                            <div class="form-group">
+                                <label>Host</label>
+                                <input type="text" id="db_host" placeholder="e.g. database-server.com" required>
+                            </div>
+                            <div class="form-group">
+                                <label>User</label>
+                                <input type="text" id="db_user" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Password</label>
+                                <input type="password" id="db_pass" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Database Name</label>
+                                <input type="text" id="db_name" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Port</label>
+                                <input type="number" id="db_port" value="3306">
+                            </div>
+                            <button type="submit" class="btn btn-success" style="width: 100%">SAVE & CONNECT</button>
+                        </form>
+                    </div>
+
+                    <div class="card">
+                        <h3>Auto-Sync Controls</h3>
+                        <p style="color: #888; margin-bottom: 20px;">Control how the local data synchronizes with the remote server.</p>
+                        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
+                            <input type="checkbox" id="db_sync_enabled" ${settings.sync_enabled === '1' ? 'checked' : ''} style="width: auto; margin: 0;">
+                            <label for="db_sync_enabled" style="margin: 0; font-weight: bold; cursor: pointer;">Enable Background Sync</label>
+                        </div>
+                        <div class="form-group">
+                            <label>Interval (seconds)</label>
+                            <input type="number" value="${settings.sync_interval || '5'}" id="db_sync_interval" min="1" max="3600">
+                        </div>
+                        <button class="btn btn-primary" style="width: 100%" onclick="saveSyncSettings()">UPDATE SYNC ENGINE</button>
+                    </div>
+
+                    <div class="card" style="grid-column: span 2; border-top: 4px solid var(--accent-color);">
+                        <h3 style="color: var(--accent-color)">Merge Work from Home</h3>
+                        <p style="color: #888; margin-bottom: 20px;">Upload a backup file (.sqlite) from another PC to synchronize missing data into this system.</p>
+                        <div style="background: rgba(241, 196, 15, 0.1); padding: 15px; border-radius: 8px; border: 1px dashed var(--accent-color); margin-bottom: 20px; font-size: 16px;">
+                            <strong>Note:</strong> The system will identify new members and transactions and add them without duplicating existing records.
+                        </div>
+                        <div class="flex gap-20" style="align-items: center">
+                            <input type="file" id="mergeFile" accept=".sqlite" style="width: auto; flex: 1">
+                            <button class="btn btn-primary" onclick="startMerge()">SYNC & MERGE DATA</button>
+                        </div>
+                    </div>
+                </div>
+
+                ${status.mysql === 'error' ? `
+                    <div class="card" style="margin-top: 25px; border-color: var(--danger-color); background: rgba(231, 76, 60, 0.1);">
+                        <h4 style="color: var(--danger-color)">⚠ CONNECTION ERROR</h4>
+                        <code style="display: block; padding: 10px; background: #000; margin-top: 10px;">${status.error}</code>
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        async function saveSyncSettings() {
+            const payload = {
+                sync_interval: document.getElementById('db_sync_interval').value,
+                sync_enabled: document.getElementById('db_sync_enabled').checked ? '1' : '0'
+            };
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Synchronization settings updated!');
+                    checkDBStatus();
+                }
+            } catch (err) { alert('Failed to save sync settings.'); }
+        }
+
+        async function saveMySQLConfig(e) {
+            e.preventDefault();
+            const payload = {
+                host: document.getElementById('db_host').value,
+                user: document.getElementById('db_user').value,
+                password: document.getElementById('db_pass').value,
+                database: document.getElementById('db_name').value,
+                port: document.getElementById('db_port').value
+            };
+
+            try {
+                const res = await fetch('/api/database/mysql-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('MySQL Configuration Saved!');
+                    renderDatabase();
+                    checkDBStatus();
+                }
+            } catch (err) { alert('Failed to save config.'); }
+        }
+
+        async function startMerge() {
+            const fileInput = document.getElementById('mergeFile');
+            if (!fileInput.files.length) return alert('Please select a .sqlite file first.');
+
+            // Security Captcha
+            const num1 = Math.floor(Math.random() * 10) + 12;
+            const num2 = Math.floor(Math.random() * 10) + 7;
+            const answer = num1 + num2;
+            const userAns = prompt(`CRITICAL ACTION: DATA MERGE\nTo verify your authority, please solve:\n${num1} + ${num2} = ?`);
+
+            if (parseInt(userAns) !== answer) {
+                alert('Security verification failed. Merge cancelled.');
+                return;
+            }
+
+            if (!confirm('WARNING: You are about to merge external data into the mosque database. Proceed?')) return;
+
+            const formData = new FormData();
+            formData.append('backup', fileInput.files[0]);
+
+            try {
+                const res = await fetch('/api/database/merge', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert('SUCCESS: ' + data.message);
+                    renderDatabase();
+                } else {
+                    alert('ERROR: ' + data.error);
+                }
+            } catch (err) {
+                alert('Connection failure during merge.');
+            }
+        }
+
+        async function renderPasswordChange() {
+            content.innerHTML = `
+                <h1>Security Settings</h1>
+                <div class="card" style="max-width: 500px;">
+                    <h3>Change Your Password</h3>
+                    <p style="color: #888; margin-bottom: 20px;">You are required to enter your current password to set a new one.</p>
+                    <div class="form-group">
+                        <label>Current Password</label>
+                        <input type="password" id="old_pass" required>
+                    </div>
+                    <div class="form-group">
+                        <label>New Password</label>
+                        <input type="password" id="new_pass" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm New Password</label>
+                        <input type="password" id="confirm_pass" required>
+                    </div>
+                    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="changePassword()">UPDATE PASSWORD</button>
+                </div>
+            `;
+        }
+
+        async function changePassword() {
+            const oldPassword = document.getElementById('old_pass').value;
+            const newPassword = document.getElementById('new_pass').value;
+            const confirmPassword = document.getElementById('confirm_pass').value;
+
+            if (!oldPassword || !newPassword) return alert('Please fill all fields.');
+            if (newPassword !== confirmPassword) return alert('New passwords do not match.');
+            if (newPassword.length < 6) return alert('Password must be at least 6 characters.');
+
+            try {
+                const res = await fetch('/api/user/change-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ oldPassword, newPassword })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Password updated successfully!');
+                    renderSettings();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) { alert('Request failed.'); }
+        }
+
+        async function logout() {
+            await fetch('/api/logout', { method: 'POST' });
+            window.location.href = '/';
+        }
+
+        // Initialize status check
+        checkDBStatus();
+        setInterval(checkDBStatus, 10000);
     </script>
 </body>
 

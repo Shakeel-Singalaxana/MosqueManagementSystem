@@ -3,12 +3,174 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const session = require('express-session');
 const dotenv = require('dotenv');
+const crypto = require('crypto');
+const multer = require('multer');
+const xlsx = require('xlsx');
+const fs = require('fs');
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const db = new Database(path.join(__dirname, 'data/mms.sqlite'));
+const sqliteDb = new Database(path.join(__dirname, 'data/mms.sqlite'));
+const mysql = require('mysql2/promise');
+
+let activeDb = null;
+let dbMode = 'sqlite'; // fallback
+let mosqueName = 'MOSQUE MANAGEMENT SYSTEM';
+
+// Database Abstraction Layer (Now Local-First)
+const dbManager = {
+    async query(sql, params = []) {
+        // ALWAYS read from local SQLite
+        return sqliteDb.prepare(sql).all(params);
+    },
+    async get(sql, params = []) {
+        // ALWAYS read from local SQLite
+        return sqliteDb.prepare(sql).get(params);
+    },
+    async run(sql, params = []) {
+        // ALWAYS write to local SQLite
+        const info = sqliteDb.prepare(sql).run(params);
+        return { lastInsertRowid: info.lastInsertRowid, changes: info.changes };
+    },
+    async transaction(callback) {
+        // ALWAYS local transaction
+        const tx = sqliteDb.transaction(callback);
+        return tx();
+    }
+};
+
+const syncStatus = {
+    lastSync: null,
+    status: 'idle', // idle, syncing, error
+    error: null,
+    pendingCount: 0,
+    interval: 5000,
+    timer: null,
+    enabled: true
+};
+
+// Background Sync Service
+const SyncService = {
+    async initialize() {
+        const intervalSetting = sqliteDb.prepare("SELECT value FROM settings WHERE key = 'sync_interval'").get();
+        if (intervalSetting) {
+            syncStatus.interval = parseInt(intervalSetting.value) * 1000;
+        }
+        const enabledSetting = sqliteDb.prepare("SELECT value FROM settings WHERE key = 'sync_enabled'").get();
+        syncStatus.enabled = enabledSetting ? enabledSetting.value === '1' : true;
+
+        if (syncStatus.enabled) this.startTimer();
+    },
+
+    startTimer() {
+        if (syncStatus.timer) clearInterval(syncStatus.timer);
+        syncStatus.timer = setInterval(() => this.sync(), syncStatus.interval);
+    },
+
+    async sync() {
+        if (!syncStatus.enabled) return;
+        if (syncStatus.status === 'syncing') return;
+
+        const configEntry = sqliteDb.prepare("SELECT value FROM settings WHERE key = 'mysql_config'").get();
+        if (!configEntry || !configEntry.value) {
+            syncStatus.status = 'idle';
+            syncStatus.error = "Remote DB not configured";
+            return;
+        }
+
+        syncStatus.status = 'syncing';
+        syncStatus.error = null;
+
+        let remoteConn = null;
+        try {
+            const config = JSON.parse(configEntry.value);
+            remoteConn = await mysql.createConnection({ ...config, connectTimeout: 5000 });
+
+            // Ensure schema exists on remote
+            await this.ensureRemoteSchema(remoteConn);
+
+            const tables = ['users', 'members', 'transactions', 'distributions', 'member_payments', 'bills', 'settings'];
+            let totalPending = 0;
+
+            for (const table of tables) {
+                const pendingRows = sqliteDb.prepare(`SELECT * FROM ${table} WHERE synced = 0`).all();
+                totalPending += pendingRows.length;
+
+                for (const row of pendingRows) {
+                    await this.upsertToRemote(remoteConn, table, row);
+                    sqliteDb.prepare(`UPDATE ${table} SET synced = 1 WHERE ${this.getPK(table)} = ?`).run(row[this.getPK(table)]);
+                }
+            }
+
+            syncStatus.pendingCount = totalPending;
+            syncStatus.lastSync = new Date().toISOString();
+            syncStatus.status = 'idle';
+
+        } catch (err) {
+            console.error('Sync Error:', err.message);
+            syncStatus.status = 'error';
+            syncStatus.error = err.message;
+        } finally {
+            if (remoteConn) await remoteConn.end();
+            this.updatePendingCount();
+        }
+    },
+
+    updatePendingCount() {
+        const tables = ['users', 'members', 'transactions', 'distributions', 'member_payments', 'bills', 'settings'];
+        let count = 0;
+        tables.forEach(t => {
+            const res = sqliteDb.prepare(`SELECT COUNT(*) as count FROM ${t} WHERE synced = 0`).get();
+            count += res.count;
+        });
+        syncStatus.pendingCount = count;
+    },
+
+    getPK(table) {
+        if (table === 'settings') return 'key';
+        if (table === 'members') return 'member_id';
+        if (table === 'transactions') return 'receipt_id';
+        if (table === 'distributions') return 'distribution_id';
+        return 'id';
+    },
+
+    async upsertToRemote(conn, table, row) {
+        const keys = Object.keys(row).filter(k => k !== 'synced');
+        const values = keys.map(k => row[k]);
+        const placeholders = keys.map(() => '?').join(', ');
+        const updates = keys.map(k => `${k} = VALUES(${k})`).join(', ');
+
+        const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`;
+        await conn.execute(sql, values);
+    },
+
+    async ensureRemoteSchema(conn) {
+        // Create tables on MySQL if they don't exist
+        await conn.execute(`CREATE TABLE IF NOT EXISTS settings ( \`key\` VARCHAR(255) PRIMARY KEY, value TEXT )`);
+        await conn.execute(`CREATE TABLE IF NOT EXISTS users ( id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(255) UNIQUE, password TEXT, role VARCHAR(50), full_name TEXT )`);
+        await conn.execute(`CREATE TABLE IF NOT EXISTS members ( id INT AUTO_INCREMENT PRIMARY KEY, member_id VARCHAR(50) UNIQUE, name TEXT, address TEXT, contact TEXT, registration_date DATETIME )`);
+        await conn.execute(`CREATE TABLE IF NOT EXISTS transactions ( id INT AUTO_INCREMENT PRIMARY KEY, receipt_id VARCHAR(100) UNIQUE, type VARCHAR(20), category VARCHAR(100), amount DECIMAL(15,2), member_id VARCHAR(50), description TEXT, timestamp DATETIME, verified_hash TEXT )`);
+        await conn.execute(`CREATE TABLE IF NOT EXISTS distributions ( id INT AUTO_INCREMENT PRIMARY KEY, distribution_id VARCHAR(100) UNIQUE, member_id VARCHAR(50), amount DECIMAL(15,2), distribution_type VARCHAR(50), year INT, notes TEXT, received_date DATETIME )`);
+        await conn.execute(`CREATE TABLE IF NOT EXISTS member_payments ( id INT AUTO_INCREMENT PRIMARY KEY, member_id VARCHAR(50), amount DECIMAL(15,2), month VARCHAR(20), status VARCHAR(20), paid_date DATETIME, transaction_id VARCHAR(100) )`);
+        await conn.execute(`CREATE TABLE IF NOT EXISTS bills ( id INT AUTO_INCREMENT PRIMARY KEY, bill_type VARCHAR(100), description TEXT, amount DECIMAL(15,2), due_date VARCHAR(50), status VARCHAR(20), paid_date DATETIME, transaction_id VARCHAR(100) )`);
+    }
+};
+
+async function initDatabase() {
+    try {
+        const nameRow = sqliteDb.prepare("SELECT value FROM settings WHERE key = 'mosque_name'").get();
+        if (nameRow) mosqueName = nameRow.value;
+
+        console.log(`✅ Local SQLite Initialized (${mosqueName}). Starting Sync Service...`);
+        SyncService.initialize();
+    } catch (err) {
+        console.error("❌ DB Init Failed:", err.message);
+    }
+}
+
+initDatabase();
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -34,10 +196,65 @@ const isAuthenticated = (roles) => {
     };
 };
 
+// --- CORE LOGIC HELPERS ---
+
+/**
+ * Centrally manages transaction recording and security.
+ * @returns {string} The receipt ID
+ */
+async function recordTransaction(type, category, amount, member_id = null, description = '') {
+    const timestamp = new Date().toISOString();
+    const receipt_id = `REC-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+
+    // Enhanced Hash Generation (SHA-256)
+    const salt = 'mosque-mms-2026-audit-secret';
+    const hashPayload = `${receipt_id}|${amount}|${timestamp}|${member_id}|${salt}`;
+    const verified_hash = crypto.createHash('sha256').update(hashPayload).digest('hex').substring(0, 16);
+
+    const sql = `
+        INSERT INTO transactions (receipt_id, type, category, amount, member_id, description, verified_hash, timestamp, synced) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+    `;
+
+    const info = await dbManager.run(sql, [receipt_id, type, category, parseFloat(amount), member_id || null, description, verified_hash, timestamp]);
+    console.log(`Transaction logged [${type.toUpperCase()}]: ${receipt_id} - Rs. ${amount}`);
+    return { receipt_id, transaction_id: info.lastInsertRowid };
+}
+
+/**
+ * Calculates months to check, ensuring current month is included on 1st day.
+ */
+function getPaymentMonths(limit = 6) {
+    const months = [];
+    const currentDate = new Date();
+    for (let i = 0; i < limit; i++) {
+        const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+        months.push(date.toISOString().substring(0, 7));
+    }
+    return months.reverse(); // Chronological order
+}
+
+/**
+ * Calculates the next available numeric member ID.
+ */
+async function getNextMemberId() {
+    const sql = "SELECT member_id FROM members WHERE member_id REGEXP '^[0-9]+$' ORDER BY CAST(member_id AS UNSIGNED) DESC LIMIT 1";
+    // better-sqlite3 uses GLOB, MySQL uses REGEXP. I'll normalize if needed or just use a simple one for now.
+    // Actually GLOB is sqlite only.
+    const query = dbMode === 'mysql'
+        ? "SELECT member_id FROM members WHERE member_id REGEXP '^[0-9]+$' ORDER BY CAST(member_id AS UNSIGNED) DESC LIMIT 1"
+        : "SELECT member_id FROM members WHERE member_id GLOB '[0-9]*' ORDER BY CAST(member_id AS INTEGER) DESC LIMIT 1";
+
+    const lastMember = await dbManager.get(query);
+    if (!lastMember) return '1001'; // Start from 1001 if no numeric IDs exist
+    const nextId = parseInt(lastMember.member_id) + 1;
+    return nextId.toString();
+}
+
 // --- AUTH ROUTES ---
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-    const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password);
+    const user = await dbManager.get('SELECT * FROM users WHERE username = ? AND password = ?', [username, password]);
 
     if (user) {
         req.session.user = { id: user.id, username: user.username, role: user.role, name: user.full_name };
@@ -60,83 +277,377 @@ app.get('/api/me', (req, res) => {
     }
 });
 
-// --- SETTINGS (Public info for Live Display) ---
-app.get('/api/settings', (req, res) => {
-    const settings = db.prepare('SELECT * FROM settings').all();
+// Change Password (Authenticated)
+app.post('/api/user/change-password', isAuthenticated(['super_admin', 'accountant']), async (req, res) => {
+    const { oldPassword, newPassword } = req.body;
+    const userId = req.session.user.id;
+
+    try {
+        const user = await dbManager.get('SELECT * FROM users WHERE id = ? AND password = ?', [userId, oldPassword]);
+        if (!user) {
+            return res.status(401).json({ success: false, error: 'Incorrect current password' });
+        }
+
+        await dbManager.run('UPDATE users SET password = ?, synced = 0 WHERE id = ?', [newPassword, userId]);
+        res.json({ success: true, message: 'Password changed successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Failed to change password' });
+    }
+});
+
+// Super Password Reset (Public)
+app.post('/api/user/reset-password-super', async (req, res) => {
+    const { username, superPassword, newPassword } = req.body;
+
+    if (superPassword !== 'Shakbrotech@mms#1206') {
+        return res.status(403).json({ success: false, error: 'Invalid Super Password' });
+    }
+
+    try {
+        const user = await dbManager.get('SELECT * FROM users WHERE username = ?', [username]);
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        await dbManager.run('UPDATE users SET password = ?, synced = 0 WHERE username = ?', [newPassword, username]);
+        res.json({ success: true, message: 'Password reset successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Failed to reset password' });
+    }
+});
+
+// --- DISTRIBUTION MANAGEMENT APIs ---
+app.get('/api/distributions/:type/:year', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { type, year } = req.params;
+
+    try {
+        const sql = `
+            SELECT d.*, m.name, m.contact 
+            FROM distributions d
+            JOIN members m ON d.member_id = m.member_id
+            WHERE d.distribution_type = ? AND d.year = ?
+            ORDER BY d.received_date DESC
+        `;
+        const distributions = await dbManager.query(sql, [type, parseInt(year)]);
+
+        res.json(distributions);
+    } catch (err) {
+        console.error('Get distributions error:', err);
+        res.status(500).json({ error: 'Failed to get distributions' });
+    }
+});
+
+app.get('/api/distributions/:type/:year/eligible', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { type, year } = req.params;
+    const { minMonthsPaid } = req.query; // Filter: minimum months paid
+
+    try {
+        // Get all members
+        const members = await dbManager.query('SELECT * FROM members ORDER BY name ASC');
+
+        // Get distribution records for this type/year
+        const receivedSql = `SELECT member_id FROM distributions WHERE distribution_type = ? AND year = ?`;
+        const distributions = await dbManager.query(receivedSql, [type, parseInt(year)]);
+        const receivedSet = new Set(distributions.map(d => d.member_id));
+
+        // Get payment counts for the last 6 months (as per original logic)
+        const monthsToCheck = getPaymentMonths(6);
+        const placeholders = monthsToCheck.map(() => '?').join(',');
+        const paymentsSql = `
+            SELECT member_id, COUNT(*) as count 
+            FROM member_payments 
+            WHERE status = 'paid' AND month IN (${placeholders})
+            GROUP BY member_id
+        `;
+        const payments = await dbManager.query(paymentsSql, monthsToCheck);
+        const paymentCounts = {};
+        payments.forEach(p => paymentCounts[p.member_id] = p.count);
+
+        const eligibleMembers = members.map(m => {
+            const paidCount = paymentCounts[m.member_id] || 0;
+            return {
+                ...m,
+                paidCount,
+                received: receivedSet.has(m.member_id)
+            };
+        });
+
+        // Filter by minimum months paid if specified
+        const filtered = minMonthsPaid
+            ? eligibleMembers.filter(m => m.paidCount >= parseInt(minMonthsPaid))
+            : eligibleMembers;
+
+        res.json(filtered);
+    } catch (err) {
+        console.error('Get eligible members error:', err);
+        res.status(500).json({ error: 'Failed to get eligible members' });
+    }
+});
+
+app.post('/api/distributions', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { member_id, distribution_type, year, notes } = req.body;
+
+    try {
+        const sql = `
+            INSERT OR REPLACE INTO distributions (member_id, distribution_type, year, notes, synced)
+            VALUES (?, ?, ?, ?, 0)
+        `;
+        const info = await dbManager.run(sql, [member_id, distribution_type, parseInt(year), notes || '']);
+
+        // FINANCIAL MISHAP FIX: Distributions are expenses
+        await recordTransaction('expense', `distribution_${distribution_type.toLowerCase()}`, 0, member_id, `Distribution Received: ${distribution_type} ${year}`);
+
+        res.json({ success: true, id: info.lastInsertRowid });
+    } catch (err) {
+        console.error('Record distribution error:', err);
+        res.status(400).json({ error: 'Failed to record distribution' });
+    }
+});
+
+app.delete('/api/distributions/:id', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        await dbManager.run('DELETE FROM distributions WHERE id = ?', [id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Delete distribution error:', err);
+        res.status(400).json({ error: 'Failed to delete distribution' });
+    }
+});
+
+// --- SETTINGS ---
+app.get('/api/settings', async (req, res) => {
+    const settings = await dbManager.query('SELECT * FROM settings');
     const settingsObj = {};
     settings.forEach(s => settingsObj[s.key] = s.value);
     res.json(settingsObj);
 });
 
+// Logo Upload Configuration
+const logoStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const dir = path.join(__dirname, 'public/assets/logos');
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname);
+        cb(null, `mosque-logo-${Date.now()}${ext}`);
+    }
+});
+const uploadLogo = multer({ storage: logoStorage });
+
+app.post('/api/settings/logo', isAuthenticated(['super_admin']), uploadLogo.single('logo'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const logoPath = `/assets/logos/${req.file.filename}`;
+
+        const query = "INSERT OR REPLACE INTO settings (key, value, synced) VALUES (?, ?, 0)";
+
+        await dbManager.run(query, ['logo_path', logoPath]);
+
+        res.json({ success: true, logo_path: logoPath });
+    } catch (err) {
+        console.error('Logo upload error:', err);
+        res.status(500).json({ error: 'Failed to upload logo' });
+    }
+});
+
+
 // --- MEMBERSHIP APIs ---
-app.get('/api/members', isAuthenticated(['accountant', 'super_admin']), (req, res) => {
-    const members = db.prepare('SELECT * FROM members ORDER BY name ASC').all();
+app.get('/api/members', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const members = await dbManager.query('SELECT * FROM members ORDER BY name ASC');
     res.json(members);
 });
 
-app.post('/api/members', isAuthenticated(['accountant', 'super_admin']), (req, res) => {
-    const { name, address, contact, member_id } = req.body;
+app.get('/api/members/next-id', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
     try {
-        const stmt = db.prepare('INSERT INTO members (member_id, name, address, contact) VALUES (?, ?, ?, ?)');
-        stmt.run(member_id, name, address, contact);
-        res.json({ success: true });
+        res.json({ nextId: await getNextMemberId() });
     } catch (err) {
-        res.status(400).json({ error: 'Member ID already exists or invalid data' });
+        res.status(500).json({ error: 'Failed to calculate next ID' });
     }
 });
 
-app.get('/api/members/:id/statement', isAuthenticated(['accountant', 'super_admin']), (req, res) => {
+app.post('/api/members', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    let { name, address, contact, member_id } = req.body;
+    let autoAssigned = false;
+
+    try {
+        // If ID provided, check for duplication
+        if (member_id) {
+            const existing = await dbManager.get('SELECT 1 FROM members WHERE member_id = ?', [member_id]);
+            if (existing) {
+                // Duplicate found! Assign next available ID
+                member_id = await getNextMemberId();
+                autoAssigned = true;
+            }
+        } else {
+            // No ID provided, assign next available
+            member_id = await getNextMemberId();
+            autoAssigned = true;
+        }
+
+        const sql = 'INSERT INTO members (member_id, name, address, contact, synced) VALUES (?, ?, ?, ?, 0)';
+        await dbManager.run(sql, [member_id, name, address, contact]);
+        res.json({ success: true, member_id, autoAssigned });
+    } catch (err) {
+        console.error('Add member error:', err);
+        res.status(400).json({ error: 'Failed to add member' });
+    }
+});
+
+app.get('/api/members/:id/statement', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
     const { id } = req.params;
-    const history = db.prepare(`
-        SELECT * FROM transactions WHERE member_id = ? ORDER BY timestamp DESC
-    `).all(id);
-    const member = db.prepare('SELECT * FROM members WHERE member_id = ?').get(id);
+    // Hide reversals from statements for everyone (cleaner statement)
+    const historySql = `
+        SELECT * FROM transactions 
+        WHERE member_id = ? 
+        AND category != 'reversal' 
+        AND description NOT LIKE '%(REVERTED)%'
+        ORDER BY timestamp DESC
+    `;
+    const history = await dbManager.query(historySql, [id]);
+    const member = await dbManager.get('SELECT * FROM members WHERE member_id = ?', [id]);
     res.json({ member, history });
 });
 
-app.post('/api/members/import', isAuthenticated(['accountant', 'super_admin']), (req, res) => {
-    const { csvData } = req.body; // Expecting raw string data
-    const lines = csvData.trim().split('\n');
-    const results = { success: 0, failed: 0 };
-
-    const stmt = db.prepare('INSERT OR IGNORE INTO members (member_id, name, address, contact) VALUES (?, ?, ?, ?)');
-
-    // Skip header and process lines
-    for (let i = 1; i < lines.length; i++) {
-        const [member_id, name, address, contact] = lines[i].split(',').map(s => s?.trim());
-        if (member_id && name) {
-            const info = stmt.run(member_id, name, address || '', contact || '');
-            if (info.changes > 0) results.success++;
-            else results.failed++;
+app.post('/api/members/import', isAuthenticated(['accountant', 'super_admin']), multer({ dest: 'uploads/' }).single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            const { csvData } = req.body;
+            if (csvData) {
+                const lines = csvData.trim().split('\n');
+                let success = 0;
+                for (let i = 1; i < lines.length; i++) {
+                    const [id, name, addr, cont] = lines[i].split(',').map(s => s?.trim());
+                    if (id && name) {
+                        const info = await dbManager.run('INSERT OR IGNORE INTO members (member_id, name, address, contact) VALUES (?, ?, ?, ?)', [id, name, addr || '', cont || '']);
+                        if (info.changes > 0) success++;
+                    }
+                }
+                return res.json({ success, failed: lines.length - 1 - success });
+            }
+            return res.status(400).json({ error: 'No file or data provided' });
         }
+
+        const workbook = xlsx.readFile(req.file.path);
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const data = xlsx.utils.sheet_to_json(sheet);
+        let success = 0;
+
+        for (const row of data) {
+            const id = (row['ID'] || row['member_id'])?.toString();
+            const name = row['Name'] || row['name'];
+            const addr = row['Address'] || row['address'];
+            const cont = row['Contact'] || row['contact'];
+
+            if (id && name) {
+                const info = await dbManager.run('INSERT OR IGNORE INTO members (member_id, name, address, contact, synced) VALUES (?, ?, ?, ?, 0)', [id, name, addr || '', cont || '']);
+                if (info.changes > 0) success++;
+            }
+        }
+
+        fs.unlinkSync(req.file.path);
+        res.json({ success, failed: data.length - success });
+    } catch (err) {
+        console.error('Import Error:', err);
+        res.status(500).json({ error: 'Import failed' });
     }
-    res.json(results);
+});
+
+app.get('/api/members/export', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    try {
+        const members = await dbManager.query('SELECT * FROM members ORDER BY member_id ASC');
+        const months = getPaymentMonths(12);
+        const feeSetting = await dbManager.get("SELECT value FROM settings WHERE key = 'monthly_membership_fee'");
+        const monthlyFee = parseFloat(feeSetting?.value || 500);
+
+        const headerRows = [
+            [mosqueName.toUpperCase()],
+            ['MEMBERSHIP PAYMENT AUDIT REPORT'],
+            [`Exported on: ${new Date().toLocaleString()}`],
+            [''],
+            ['ID', 'Name', 'Address', 'Contact', 'Status', 'Total Paid (Rs.)', ...months]
+        ];
+
+        const dataRows = [];
+        for (const m of members) {
+            let totalPaidForMember = 0;
+            const monthStatuses = [];
+            for (const month of months) {
+                const payment = await dbManager.get(`
+                    SELECT status FROM member_payments 
+                    WHERE member_id = ? AND month = ? AND status = 'paid'
+                `, [m.member_id, month]);
+
+                if (payment) {
+                    const isReverted = await dbManager.get(`
+                        SELECT 1 FROM transactions 
+                        WHERE member_id = ? AND category = 'membership_fee' 
+                        AND description LIKE ? AND description LIKE '%(REVERTED)%'
+                    `, [m.member_id, `%${month}%`]);
+
+                    if (!isReverted) {
+                        totalPaidForMember += monthlyFee;
+                        monthStatuses.push('PAID');
+                    } else {
+                        monthStatuses.push('PENDING');
+                    }
+                } else {
+                    monthStatuses.push('PENDING');
+                }
+            }
+
+            dataRows.push([
+                m.member_id, m.name, m.address, m.contact, 'ACTIVE',
+                totalPaidForMember.toFixed(2), ...monthStatuses
+            ]);
+        }
+
+        const wb = xlsx.utils.book_new();
+        const ws = xlsx.utils.aoa_to_sheet([...headerRows, ...dataRows]);
+        xlsx.utils.book_append_sheet(wb, ws, "Members Report");
+        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=Members_Payment_Audit.xlsx');
+        res.send(buffer);
+    } catch (err) {
+        console.error('Export Error:', err);
+        res.status(500).json({ error: 'Export failed' });
+    }
 });
 
 // --- TRANSACTION APIs ---
-app.get('/api/transactions', isAuthenticated(['accountant', 'super_admin']), (req, res) => {
-    const transactions = db.prepare(`
+app.get('/api/transactions', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const isSuperAdmin = req.session.user.role === 'super_admin';
+    let query = `
         SELECT t.*, m.name as member_name 
         FROM transactions t 
         LEFT JOIN members m ON t.member_id = m.member_id 
-        ORDER BY timestamp DESC LIMIT 100
-    `).all();
+    `;
+
+    // If accountant, hide reversals and original reverted records
+    if (!isSuperAdmin) {
+        query += ` WHERE t.category != 'reversal' AND t.description NOT LIKE '%(REVERTED)%' `;
+    }
+
+    query += ` ORDER BY timestamp DESC LIMIT 100 `;
+
+    const transactions = await dbManager.query(query);
     res.json(transactions);
 });
 
-app.post('/api/transactions', isAuthenticated(['accountant', 'super_admin']), (req, res) => {
+app.post('/api/transactions', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
     const { type, category, amount, member_id, description } = req.body;
-    const receipt_id = `REC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const verified_hash = Buffer.from(receipt_id + amount).toString('base64').substring(0, 10);
 
     try {
-        console.log('Recording transaction:', { type, category, amount, member_id });
-        const stmt = db.prepare(`
-            INSERT INTO transactions (receipt_id, type, category, amount, member_id, description, verified_hash) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-        const info = stmt.run(receipt_id, type, category, parseFloat(amount), member_id || null, description || '', verified_hash);
-        console.log('Transaction recorded successfully:', info);
+        const { receipt_id } = await recordTransaction(type, category, amount, member_id, description);
         res.json({ success: true, receipt_id });
     } catch (err) {
         console.error('Database Error:', err);
@@ -145,22 +656,293 @@ app.post('/api/transactions', isAuthenticated(['accountant', 'super_admin']), (r
 });
 
 // --- DASHBOARD STATS ---
-app.get('/api/dashboard/stats', isAuthenticated(['accountant', 'super_admin']), (req, res) => {
-    const stats = {
-        total_income: db.prepare("SELECT SUM(amount) as sum FROM transactions WHERE type = 'income'").get().sum || 0,
-        total_expense: db.prepare("SELECT SUM(amount) as sum FROM transactions WHERE type = 'expense'").get().sum || 0,
-        pending_fees: 1500, // Hardcoded placeholder for now
-        maintenance_balance: 0
-    };
-    stats.maintenance_balance = stats.total_income - stats.total_expense;
-    res.json(stats);
+app.get('/api/dashboard/stats', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    try {
+        const incomeSql = "SELECT SUM(amount) as sum FROM transactions WHERE type = 'income' AND category != 'reversal' AND description NOT LIKE '%(REVERTED)%'";
+        const expenseSql = "SELECT SUM(amount) as sum FROM transactions WHERE type = 'expense' AND category != 'reversal' AND description NOT LIKE '%(REVERTED)%'";
+
+        const incomeRow = await dbManager.get(incomeSql);
+        const expenseRow = await dbManager.get(expenseSql);
+
+        const stats = {
+            total_income: incomeRow.sum || 0,
+            total_expense: expenseRow.sum || 0,
+            pending_fees: 0,
+            pending_bills: 0,
+            maintenance_balance: 0
+        };
+
+        // Calculate pending member fees across ALL months (last 6 months)
+        const feeSetting = await dbManager.get("SELECT value FROM settings WHERE key = 'monthly_membership_fee'");
+        const monthlyFee = parseFloat(feeSetting?.value || 500);
+
+        const countRow = await dbManager.get("SELECT COUNT(*) as count FROM members");
+        const totalMembers = countRow.count;
+
+        const monthsToCheck = getPaymentMonths(6);
+
+        // Count total unpaid fees across all months
+        let totalPendingCount = 0;
+        for (const month of monthsToCheck) {
+            const paidCountRow = await dbManager.get("SELECT COUNT(*) as count FROM member_payments WHERE month = ? AND status = 'paid'", [month]);
+            totalPendingCount += Math.max(0, totalMembers - paidCountRow.count);
+        }
+
+        stats.pending_fees = totalPendingCount * monthlyFee;
+
+        // Calculate pending bills
+        const billsRow = await dbManager.get("SELECT SUM(amount) as sum FROM bills WHERE status = 'pending'");
+        stats.pending_bills = billsRow.sum || 0;
+
+        stats.maintenance_balance = stats.total_income - stats.total_expense;
+        res.json(stats);
+    } catch (err) {
+        console.error('Dashboard stats error:', err);
+        res.status(500).json({ error: 'Failed to calculate stats' });
+    }
+});
+
+app.get('/api/transactions/export', isAuthenticated(['super_admin']), async (req, res) => {
+    try {
+        const sql = `
+            SELECT t.*, m.name as member_name 
+            FROM transactions t 
+            LEFT JOIN members m ON t.member_id = m.member_id 
+            ORDER BY timestamp DESC
+        `;
+        const transactions = await dbManager.query(sql);
+
+        // 1. Prepare Header Section
+        const header = [
+            [mosqueName.toUpperCase()],
+            ['FULL FINANCIAL AUDIT LOG'],
+            [`Exported on: ${new Date().toLocaleString()}`],
+            [''], // Spacer
+            ['Date', 'Receipt ID', 'Type', 'Category', 'Amount (Rs.)', 'Member', 'Description', 'Verified Hash']
+        ];
+
+        // 2. Prepare Data Rows
+        const dataRows = transactions.map(t => [
+            new Date(t.timestamp).toLocaleString(),
+            t.receipt_id,
+            t.type.toUpperCase(),
+            t.category.replace('_', ' ').toUpperCase(),
+            t.amount.toFixed(2),
+            t.member_name || t.member_id || 'N/A',
+            t.description,
+            t.verified_hash
+        ]);
+
+        const wb = xlsx.utils.book_new();
+        const ws = xlsx.utils.aoa_to_sheet([...header, ...dataRows]);
+
+        // 3. Set Column Widths for better formatting
+        ws['!cols'] = [
+            { wch: 20 }, // Date
+            { wch: 25 }, // Receipt ID
+            { wch: 10 }, // Type
+            { wch: 20 }, // Category
+            { wch: 15 }, // Amount
+            { wch: 20 }, // Member
+            { wch: 40 }, // Description
+            { wch: 18 }  // Hash
+        ];
+
+        // 4. Add some merging for the header
+        ws['!merges'] = [
+            { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, // Mosque Name
+            { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } }, // Title
+            { s: { r: 2, c: 0 }, e: { r: 2, c: 7 } }  // Exported on
+        ];
+        xlsx.utils.book_append_sheet(wb, ws, "Audit Log");
+
+        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=Mosque_Audit_Report.xlsx');
+        res.send(buffer);
+    } catch (err) {
+        console.error('Audit Export Error:', err);
+        res.status(500).json({ error: 'Export failed' });
+    }
+});
+
+// --- MEMBER PAYMENTS APIs ---
+app.get('/api/member-payments', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { month } = req.query;
+    let query = `
+        SELECT mp.*, m.name as member_name 
+        FROM member_payments mp
+        LEFT JOIN members m ON mp.member_id = m.member_id
+    `;
+
+    if (month) {
+        query += ` WHERE mp.month = ?`;
+        const payments = await dbManager.query(query + ' ORDER BY mp.status DESC, m.name ASC', [month]);
+        res.json(payments);
+    } else {
+        const payments = await dbManager.query(query + ' ORDER BY mp.month DESC, mp.status DESC');
+        res.json(payments);
+    }
+});
+
+app.get('/api/pending-fees', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    try {
+        const currentMonth = new Date().toISOString().substring(0, 7);
+        const feeSetting = await dbManager.get("SELECT value FROM settings WHERE key = 'monthly_membership_fee'");
+        const monthlyFee = parseFloat(feeSetting?.value || 500);
+
+        // Get all members and their payment status for current month
+        const sql = `
+            SELECT 
+                m.member_id, 
+                m.name, 
+                m.contact,
+                COALESCE(mp.status, 'pending') as status,
+                COALESCE(mp.paid_date, NULL) as paid_date
+            FROM members m
+            LEFT JOIN member_payments mp ON m.member_id = mp.member_id AND mp.month = ?
+            ORDER BY status DESC, m.name ASC
+        `;
+        const members = await dbManager.query(sql, [currentMonth]);
+
+        res.json({ members, monthlyFee, currentMonth });
+    } catch (err) {
+        console.error('Pending fees error:', err);
+        res.status(500).json({ error: 'Failed to calculate pending fees' });
+    }
+});
+
+app.get('/api/member-payments/:member_id/history', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    try {
+        const { member_id } = req.params;
+        const feeSetting = await dbManager.get("SELECT value FROM settings WHERE key = 'monthly_membership_fee'");
+        const monthlyFee = parseFloat(feeSetting?.value || 500);
+
+        // Get all payment records for this member
+        const payments = await dbManager.query('SELECT * FROM member_payments WHERE member_id = ? ORDER BY month DESC', [member_id]);
+
+        // Generate list of months from member join date to current month
+        const member = await dbManager.get('SELECT * FROM members WHERE member_id = ?', [member_id]);
+        if (!member) {
+            return res.status(404).json({ error: 'Member not found' });
+        }
+
+        const monthsToCheck = getPaymentMonths(6);
+
+        // Build payment status for each month
+        const paymentMap = {};
+        payments.forEach(p => {
+            paymentMap[p.month] = p;
+        });
+
+        const history = monthsToCheck.map(month => ({
+            month,
+            status: paymentMap[month]?.status || 'pending',
+            amount: monthlyFee,
+            paid_date: paymentMap[month]?.paid_date || null,
+            id: paymentMap[month]?.id || null
+        }));
+
+        res.json({ history, monthlyFee, member });
+    } catch (err) {
+        console.error('Payment history error:', err);
+        res.status(500).json({ error: 'Failed to get payment history' });
+    }
+});
+
+app.post('/api/member-payments/mark-paid', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { member_id, month } = req.body;
+    const feeSetting = await dbManager.get("SELECT value FROM settings WHERE key = 'monthly_membership_fee'");
+    const monthlyFee = parseFloat(feeSetting?.value || 500);
+
+    try {
+        // FINANCIAL MISHAP FIX: Create transaction first
+        const { receipt_id } = await recordTransaction('income', 'membership_fee', monthlyFee, member_id, `Monthly Fee: ${month}`);
+
+        const query = 'INSERT OR REPLACE INTO member_payments (member_id, month, amount, paid_date, status, transaction_id, synced) VALUES (?, ?, ?, CURRENT_TIMESTAMP, \'paid\', ?, 0)';
+
+        await dbManager.run(query, [member_id, month, monthlyFee, receipt_id]);
+        res.json({ success: true, receipt_id });
+    } catch (err) {
+        console.error('Mark paid error:', err);
+        res.status(400).json({ error: 'Failed to mark payment' });
+    }
+});
+
+app.delete('/api/member-payments/:id/forgive', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        await dbManager.run('DELETE FROM member_payments WHERE id = ?', [id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Forgive payment error:', err);
+        res.status(400).json({ error: 'Failed to forgive payment' });
+    }
+});
+
+// --- BILLS MANAGEMENT APIs ---
+app.get('/api/bills', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const bills = await dbManager.query('SELECT * FROM bills ORDER BY status ASC, due_date ASC');
+    res.json(bills);
+});
+
+app.post('/api/bills', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { bill_type, description, amount, due_date } = req.body;
+
+    try {
+        const sql = `
+            INSERT INTO bills (bill_type, description, amount, due_date, status, synced)
+            VALUES (?, ?, ?, ?, 'pending', 0)
+        `;
+        const info = await dbManager.run(sql, [bill_type, description, parseFloat(amount), due_date]);
+        res.json({ success: true, id: info.lastInsertRowid });
+    } catch (err) {
+        console.error('Create bill error:', err);
+        res.status(400).json({ error: 'Failed to create bill' });
+    }
+});
+
+app.put('/api/bills/:id/pay', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const bill = await dbManager.get('SELECT * FROM bills WHERE id = ?', [id]);
+        if (!bill) return res.status(404).json({ error: 'Bill not found' });
+
+        // FINANCIAL MISHAP FIX: Create transaction for bill payment
+        const { receipt_id } = await recordTransaction('expense', `bill_${bill.bill_type.toLowerCase()}`, bill.amount, null, `Paid Bill: ${bill.description}`);
+
+        const sql = `
+            UPDATE bills 
+            SET status = 'paid', paid_date = CURRENT_TIMESTAMP, transaction_id = ?, synced = 0
+            WHERE id = ?
+        `;
+        await dbManager.run(sql, [receipt_id, id]);
+        res.json({ success: true, receipt_id });
+    } catch (err) {
+        console.error('Pay bill error:', err);
+        res.status(400).json({ error: 'Failed to pay bill' });
+    }
+});
+
+app.delete('/api/bills/:id', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        await dbManager.run('DELETE FROM bills WHERE id = ?', [id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Delete bill error:', err);
+        res.status(400).json({ error: 'Failed to delete bill' });
+    }
 });
 
 // --- LIVE DISPLAY APIs ---
 app.get('/api/prayer-times', async (req, res) => {
     try {
-        // Default to a generic location or city from settings
-        const response = await fetch('http://api.aladhan.com/v1/timingsByCity?city=London&country=UK&method=2');
+        // Updated to Colombo, Sri Lanka
+        const response = await fetch('http://api.aladhan.com/v1/timingsByCity?city=Colombo&country=Sri%20Lanka&method=2');
         const data = await response.json();
         res.json(data);
     } catch (err) {
@@ -168,13 +950,289 @@ app.get('/api/prayer-times', async (req, res) => {
     }
 });
 
-app.get('/api/live/donors', (req, res) => {
-    const donors = db.prepare(`
-        SELECT amount, member_id, description FROM transactions 
-        WHERE type = 'income' AND category = 'charity' 
-        ORDER BY timestamp DESC LIMIT 10
-    `).all();
-    res.json(donors);
+app.get('/api/live/donors', async (req, res) => {
+    try {
+        // Last 5 individual donors (excluding Friday Collection, REVERTED, and Anonymous)
+        const donorsSql = `
+            SELECT t.amount, COALESCE(m.name, t.member_id) as donor_name 
+            FROM transactions t
+            LEFT JOIN members m ON t.member_id = m.member_id
+            WHERE t.type = 'income' AND t.category != 'membership_fee' 
+            AND t.description NOT LIKE '%Friday%'
+            AND t.category != 'reversal' AND t.description NOT LIKE '%(REVERTED)%'
+            AND t.member_id IS NOT NULL
+            ORDER BY t.timestamp DESC LIMIT 5
+        `;
+        const donors = await dbManager.query(donorsSql);
+
+        // Latest Friday Collection
+        const fridaySql = `
+            SELECT amount, timestamp FROM transactions 
+            WHERE (description LIKE '%Friday%' OR category = 'friday_collection')
+            AND category != 'reversal' AND description NOT LIKE '%(REVERTED)%'
+            ORDER BY timestamp DESC LIMIT 1
+        `;
+        const fridayCollection = await dbManager.get(fridaySql);
+
+        res.json({ donors, fridayCollection });
+    } catch (err) {
+        console.error('Live donors error:', err);
+        res.status(500).json({ error: 'Failed to fetch donor data' });
+    }
+});
+
+app.get('/api/audit/integrity-check', isAuthenticated(['super_admin']), async (req, res) => {
+    try {
+        const transactions = await dbManager.query("SELECT * FROM transactions");
+        const salt = 'mosque-mms-2026-audit-secret';
+        const issues = [];
+
+        transactions.forEach(t => {
+            const hashPayload = `${t.receipt_id}|${t.amount}|${t.timestamp}|${t.member_id}|${salt}`;
+            const expectedHash = crypto.createHash('sha256').update(hashPayload).digest('hex').substring(0, 16);
+
+            if (t.verified_hash !== expectedHash) {
+                issues.push({
+                    receipt_id: t.receipt_id,
+                    stored: t.verified_hash,
+                    expected: expectedHash,
+                    date: t.timestamp
+                });
+            }
+        });
+
+        res.json({
+            success: true,
+            total_verified: transactions.length,
+            mismatch_count: issues.length,
+            issues
+        });
+    } catch (err) {
+        console.error('Integrity check error:', err);
+        res.status(500).json({ error: 'Failed to run integrity check' });
+    }
+});
+
+// Setup upload storage for database merges
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const dir = path.join(__dirname, 'data/uploads');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+        cb(null, `merge_${Date.now()}.sqlite`);
+    }
+});
+const uploadMerge = multer({ storage });
+
+app.post('/api/database/merge', isAuthenticated(['super_admin']), uploadMerge.single('backup'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const backupPath = req.file.path;
+    let backupDb;
+    try {
+        backupDb = new Database(backupPath);
+
+        // 1. Members
+        const members = backupDb.prepare('SELECT * FROM members').all();
+        for (const m of members) {
+            await dbManager.run(`
+                INSERT OR IGNORE INTO members (member_id, name, address, contact, registration_date, synced)
+                VALUES (?, ?, ?, ?, ?, 0)
+            `, [m.member_id, m.name, m.address, m.contact, m.registration_date]);
+        }
+
+        // 2. Transactions
+        const transactions = backupDb.prepare('SELECT * FROM transactions').all();
+        for (const t of transactions) {
+            await dbManager.run(`
+                INSERT OR IGNORE INTO transactions (receipt_id, type, category, amount, member_id, description, timestamp, verified_hash, synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            `, [t.receipt_id, t.type, t.category, t.amount, t.member_id, t.description, t.timestamp, t.verified_hash]);
+        }
+
+        // 3. Member Payments
+        const payments = backupDb.prepare('SELECT * FROM member_payments').all();
+        for (const p of payments) {
+            const checkSql = `SELECT 1 FROM member_payments WHERE member_id = ? AND month = ? AND (transaction_id = ? OR (transaction_id IS NULL AND ? IS NULL))`;
+            const exists = await dbManager.get(checkSql, [p.member_id, p.month, p.transaction_id, p.transaction_id]);
+            if (!exists) {
+                await dbManager.run(`
+                    INSERT INTO member_payments (member_id, amount, month, status, paid_date, transaction_id, synced)
+                    VALUES (?, ?, ?, ?, ?, ?, 0)
+                `, [p.member_id, p.amount, p.month, p.status, p.paid_date, p.transaction_id]);
+            }
+        }
+
+        // 4. Bills
+        const bills = backupDb.prepare('SELECT * FROM bills').all();
+        for (const b of bills) {
+            const checkSql = `SELECT 1 FROM bills WHERE bill_type = ? AND description = ? AND (transaction_id = ? OR (transaction_id IS NULL AND ? IS NULL))`;
+            const exists = await dbManager.get(checkSql, [b.bill_type, b.description, b.transaction_id, b.transaction_id]);
+            if (!exists) {
+                await dbManager.run(`
+                    INSERT INTO bills (bill_type, description, amount, due_date, status, paid_date, transaction_id, synced)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                `, [b.bill_type, b.description, b.amount, b.due_date, b.status, b.paid_date, b.transaction_id]);
+            }
+        }
+
+        // 5. Distributions
+        const distributions = backupDb.prepare('SELECT * FROM distributions').all();
+        for (const d of distributions) {
+            await dbManager.run(`
+                INSERT OR IGNORE INTO distributions (distribution_id, member_id, amount, distribution_type, year, notes, received_date, synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            `, [d.distribution_id, d.member_id, d.amount, d.distribution_type, d.year, d.notes, d.received_date]);
+        }
+
+        backupDb.close();
+        fs.unlinkSync(backupPath);
+        res.json({ success: true, message: 'Data merged successfully!' });
+
+    } catch (err) {
+        console.error('Merge Error:', err);
+        if (backupDb) backupDb.close();
+        if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
+        res.status(500).json({ error: 'Merge failed: ' + err.message });
+    }
+});
+
+app.get('/api/database/backup', isAuthenticated(['super_admin']), (req, res) => {
+    const dbPath = path.join(__dirname, 'data/mms.sqlite');
+    res.download(dbPath, 'mms_backup.sqlite');
+});
+
+app.get('/api/database/status', async (req, res) => {
+    try {
+        // SQLITE is always connected if server is running
+        sqliteDb.prepare("SELECT 1").get();
+
+        const mysqlConfigEntry = await dbManager.get("SELECT value FROM settings WHERE key = 'mysql_config'");
+        let mysqlStatus = 'not_configured';
+        let mysqlError = null;
+
+        if (mysqlConfigEntry && mysqlConfigEntry.value) {
+            try {
+                const config = JSON.parse(mysqlConfigEntry.value);
+                // Quick timeout for ping using mysql2/promise
+                const tempConn = await mysql.createConnection({
+                    ...config,
+                    connectTimeout: 5000
+                });
+                await tempConn.ping();
+                await tempConn.end();
+                mysqlStatus = 'connected';
+            } catch (err) {
+                mysqlStatus = 'error';
+                mysqlError = err.code || err.message;
+            }
+        }
+
+        res.json({
+            sqlite: 'connected',
+            mysql: mysqlStatus,
+            mode: dbMode,
+            error: mysqlStatus === 'error' ? mysqlError : null
+        });
+    } catch (err) {
+        res.status(500).json({ sqlite: 'error', error: err.message });
+    }
+});
+
+app.get('/api/sync/status', isAuthenticated(['super_admin']), (req, res) => {
+    res.json(syncStatus);
+});
+
+app.post('/api/sync/trigger', isAuthenticated(['super_admin']), async (req, res) => {
+    try {
+        await SyncService.sync();
+        res.json({ success: true, status: syncStatus });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/settings', isAuthenticated(['super_admin']), async (req, res) => {
+    const settings = req.body;
+    try {
+        const query = "INSERT OR REPLACE INTO settings (key, value, synced) VALUES (?, ?, 0)";
+
+        for (const [key, value] of Object.entries(settings)) {
+            await dbManager.run(query, [key, value ? value.toString() : '']);
+        }
+
+        // Update global mosqueName for exports
+        if (settings.mosque_name) {
+            mosqueName = settings.mosque_name;
+        }
+
+        // Handle sync interval/enabled change
+        if (settings.sync_interval) {
+            syncStatus.interval = parseInt(settings.sync_interval) * 1000;
+            if (syncStatus.enabled) SyncService.startTimer();
+        }
+        if (settings.hasOwnProperty('sync_enabled')) {
+            syncStatus.enabled = settings.sync_enabled === '1' || settings.sync_enabled === 1 || settings.sync_enabled === true;
+            if (syncStatus.enabled) SyncService.startTimer();
+            else if (syncStatus.timer) clearInterval(syncStatus.timer);
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Save settings error:', err);
+        res.status(400).json({ error: 'Failed to save settings' });
+    }
+});
+
+app.post('/api/database/mysql-config', isAuthenticated(['super_admin']), async (req, res) => {
+    const { host, user, password, database, port } = req.body;
+    const config = JSON.stringify({ host, user, password, database, port: parseInt(port) || 3306 });
+
+    try {
+        // ALWAYS write to local settings, SyncService will push it if DB is connected
+        await dbManager.run("INSERT OR REPLACE INTO settings (key, value, synced) VALUES ('mysql_config', ?, 0)", [config]);
+
+        // Trigger an immediate sync attempt to test connection
+        SyncService.sync();
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/transactions/:id/revert', isAuthenticated(['super_admin']), async (req, res) => {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    try {
+        const transaction = await dbManager.get("SELECT * FROM transactions WHERE receipt_id = ?", [id]);
+        if (!transaction) return res.status(404).json({ error: 'Transaction not found' });
+
+        // Record a counter-transaction (reversal)
+        const type = transaction.type === 'income' ? 'expense' : 'income';
+        const category = 'reversal';
+        const description = `REVERSAL of ${transaction.receipt_id}: ${reason}`;
+
+        const { receipt_id } = await recordTransaction(type, category, transaction.amount, transaction.member_id, description);
+
+        // Update the original transaction description to reflect reversal
+        const updateSql = "UPDATE transactions SET description = description || ' (REVERTED)', synced = 0 WHERE receipt_id = ?";
+
+        await dbManager.run(updateSql, [id]);
+
+        // If it was a membership fee, update member_payments table to set back to pending
+        if (transaction.category === 'membership_fee') {
+            await dbManager.run("UPDATE member_payments SET status = 'pending', synced = 0 WHERE transaction_id = ?", [id]);
+        }
+
+        res.json({ success: true, reversal_receipt: receipt_id });
+    } catch (err) {
+        console.error('Reversal error:', err);
+        res.status(500).json({ error: 'Failed to revert transaction' });
+    }
 });
 
 app.listen(PORT, () => {

@@ -14,6 +14,51 @@
     --font-size-xl: 32px;
 }
 
+/* Branded Header Styles */
+.branded-header {
+    background: #111;
+    border-bottom: 3px solid var(--accent-color);
+    padding: 20px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 30px;
+}
+
+.brand-section {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.mosque-logo {
+    height: 80px;
+    width: 80px;
+    object-fit: contain;
+    border-radius: 8px;
+    background: #222;
+    padding: 5px;
+    border: 1px solid #444;
+}
+
+.mosque-info h1 {
+    margin: 0;
+    font-size: 28px;
+    line-height: 1.2;
+}
+
+.mosque-detail-text {
+    font-size: 14px;
+    color: #888;
+    margin-top: 5px;
+}
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -39,6 +84,26 @@ h3 {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
+}
+
+/* Developer Footer Styles */
+.developer-footer {
+    padding: 10px;
+    border-top: 1px solid var(--border-color);
+    margin-top: auto;
+    font-size: 10px;
+    color: #666;
+    text-align: center;
+    opacity: 0.7;
+}
+
+.developer-footer a {
+    color: var(--accent-color);
+    text-decoration: none;
+}
+
+.developer-footer a:hover {
+    text-decoration: underline;
 }
 
 /* Senior-Friendly Buttons */
@@ -146,8 +211,6 @@ input:focus {
     max-width: 500px;
 }
 
-/* Overlay / Watermark for Print */
-
 /* Table Styles */
 table {
     width: 100%;
@@ -192,13 +255,30 @@ tbody tr:nth-child(even) {
 }
 
 @media print {
+    @page {
+        margin: 0.5cm;
+        size: auto;
+    }
+
     .no-print {
         display: none !important;
     }
 
     body {
-        background-color: white;
-        color: black;
+        background-color: white !important;
+        color: black !important;
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: auto;
+        overflow: visible;
+    }
+
+    .receipt-box,
+    .card,
+    table {
+        page-break-inside: avoid;
+        break-inside: avoid;
     }
 
     .card {
@@ -211,8 +291,56 @@ tbody tr:nth-child(even) {
         left: 50%;
         transform: translate(-50%, -50%) rotate(-45deg);
         font-size: 100px;
-        color: rgba(0, 0, 0, 0.1);
+        color: rgba(0, 0, 0, 0.05);
         z-index: -1;
         pointer-events: none;
     }
+
+    .developer-credits {
+        position: fixed;
+        bottom: 5px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        font-size: 8px;
+        color: #999;
+        font-family: sans-serif;
+    }
+
+    .developer-credits p {
+        margin: 0 !important;
+        font-size: 8px !important;
+    }
+}
+
+
+/* Database Status indicator */
+.db-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    background: #111;
+    padding: 5px 15px;
+    border-radius: 20px;
+    border: 1px solid #333;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #888;
+}
+
+.status-dot.connected {
+    background: var(--success-color);
+    box-shadow: 0 0 10px var(--success-color);
+}
+
+.status-dot.error {
+    background: var(--danger-color);
+    box-shadow: 0 0 10px var(--danger-color);
 }
