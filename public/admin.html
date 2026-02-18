@@ -188,7 +188,7 @@
                 <div class="card">
                     <h3>Mosque Logo</h3>
                     <div style="display: flex; gap: 30px; align-items: center;">
-                        <img src="${settings.logo_path || '/assets/img/logo.png'}" id="logoPreview" style="height: 120px; width: 120px; object-fit: contain; background: #222; padding: 10px; border-radius: 8px; border: 1px solid #444;">
+                        <img src="${settings.logo_data || settings.logo_path || '/assets/img/logo.png'}" id="logoPreview" style="height: 120px; width: 120px; object-fit: contain; background: #222; padding: 10px; border-radius: 8px; border: 1px solid #444;">
                         <div style="flex: 1;">
                             <p style="color: #888; margin-bottom: 15px;">Select a high-quality logo image (PNG/JPG).</p>
                             <input type="file" id="logoUpload" accept="image/*" style="margin-bottom: 15px;">
@@ -239,6 +239,7 @@
                                     </td>
                                     <td>${l.member_name || l.member_id || '-'}</td>
                                     <td>
+                                        ${l.proof_image ? `<button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px; margin-right: 5px;" onclick="showProof('${l.receipt_id}')">PROOF</button>` : ''}
                                         <button class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;" onclick="revertTransaction('${l.receipt_id}', '${l.amount}')">REVERT</button>
                                     </td>
                                 </tr>
@@ -262,8 +263,11 @@
                 <div class="card" style="margin-top: 25px;">
                     <h3>Data Exports</h3>
                     <p style="color: #888; margin-bottom: 20px;">Download direct reports for committee review.</p>
-                    <button class="btn btn-success" onclick="window.location.href='/api/transactions/export'">EXPORT FULL AUDIT (EXCEL)</button>
-                    <button class="btn btn-success" onclick="window.location.href='/api/members/export'">EXPORT MEMBERSHIP AUDIT (EXCEL)</button>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <button class="btn btn-success" onclick="window.location.href='/api/transactions/export'">EXPORT FULL AUDIT (EXCEL)</button>
+                        <button class="btn btn-primary" onclick="window.open('/api/transactions/export-visual', '_blank')">EXPORT VISUAL REPORT (HTML/PDF)</button>
+                        <button class="btn btn-success" onclick="window.location.href='/api/members/export'">EXPORT MEMBERSHIP AUDIT (EXCEL)</button>
+                    </div>
                 </div>
             `;
         }
@@ -340,6 +344,28 @@
             }
         }
 
+        async function showProof(receiptId) {
+            try {
+                const res = await fetch('/api/transactions');
+                const logs = await res.json();
+                const l = logs.find(log => log.receipt_id === receiptId);
+
+                if (l && l.proof_image) {
+                    const modalHtml = `
+                        <div id="proofModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 10000; display: flex; align-items: center; justify-content: center; flex-direction: column;" onclick="this.remove()">
+                            <img src="${l.proof_image}" style="max-width: 90%; max-height: 90vh; border: 2px solid #fff; box-shadow: 0 0 20px rgba(0,0,0,0.5);">
+                            <p style="color: white; margin-top: 10px;">Click anywhere to close</p>
+                        </div>
+                    `;
+                    document.body.insertAdjacentHTML('beforeend', modalHtml);
+                } else {
+                    alert('No proof image found for this transaction.');
+                }
+            } catch (err) {
+                alert('Failed to load proof.');
+            }
+        }
+
         async function printReversal(originalId, amount, reason, newId) {
             const setRes = await fetch('/api/settings');
             const settings = await setRes.json();
@@ -362,7 +388,7 @@
                 <body onload="window.print(); window.close();">
                     <div class="memo-box">
                         <div class="memo-header">
-                            <img src="${settings.logo_path || '/assets/logo-placeholder.png'}" class="memo-logo">
+                            <img src="${settings.logo_data || settings.logo_path || '/assets/logo-placeholder.png'}" class="memo-logo">
                             <h2>${settings.mosque_name || 'MOSQUE MANAGEMENT SYSTEM'}</h2>
                         </div>
                         <h1>TRANSACTION CANCELLATION</h1>
@@ -381,6 +407,7 @@
                         </p>
                         <div class="developer-credits">
                             <p>&copy; 2026 ShakBrotech</p>
+                            <p>System by Shakeel Singalaxana</p>
                         </div>
                     </div>
                 </body>
@@ -404,7 +431,7 @@
                 const data = await res.json();
                 if (data.success) {
                     alert('Logo uploaded successfully!');
-                    document.getElementById('logoPreview').src = data.logo_path;
+                    document.getElementById('logoPreview').src = data.logo_data || data.logo_path;
                     checkDBStatus(); // Update header logo
                 } else {
                     alert('Error: ' + data.error);
@@ -458,7 +485,7 @@
                 const settings = await setRes.json();
 
                 if (headerName) headerName.innerText = settings.mosque_name || 'MOSQUE MANAGEMENT SYSTEM';
-                if (headerLogo) headerLogo.src = settings.logo_path || '/assets/img/logo.png';
+                if (headerLogo) headerLogo.src = settings.logo_data || settings.logo_path || '/assets/img/logo.png';
                 if (headerDetails) {
                     const details = [];
                     if (settings.mosque_phone) details.push(`Tel: ${settings.mosque_phone}`);
@@ -744,6 +771,21 @@
         // Initialize status check
         checkDBStatus();
         setInterval(checkDBStatus, 10000);
+        // Init header branding on load
+        async function initBranding() {
+            try {
+                const res = await fetch('/api/settings');
+                const settings = await res.json();
+                if (settings.mosque_name) document.getElementById('headerMosqueName').innerText = settings.mosque_name;
+                document.getElementById('headerLogo').src = settings.logo_data || settings.logo_path || '/assets/img/logo.png';
+
+                const details = [];
+                if (settings.mosque_phone) details.push(settings.mosque_phone);
+                if (settings.mosque_address) details.push(settings.mosque_address);
+                document.getElementById('headerDetails').innerText = details.join(' | ');
+            } catch (e) { console.error('Branding init failed', e); }
+        }
+        initBranding();
     </script>
 </body>
 

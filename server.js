@@ -151,7 +151,7 @@ const SyncService = {
         await conn.execute(`CREATE TABLE IF NOT EXISTS settings ( \`key\` VARCHAR(255) PRIMARY KEY, value TEXT )`);
         await conn.execute(`CREATE TABLE IF NOT EXISTS users ( id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(255) UNIQUE, password TEXT, role VARCHAR(50), full_name TEXT )`);
         await conn.execute(`CREATE TABLE IF NOT EXISTS members ( id INT AUTO_INCREMENT PRIMARY KEY, member_id VARCHAR(50) UNIQUE, name TEXT, address TEXT, contact TEXT, registration_date DATETIME )`);
-        await conn.execute(`CREATE TABLE IF NOT EXISTS transactions ( id INT AUTO_INCREMENT PRIMARY KEY, receipt_id VARCHAR(100) UNIQUE, type VARCHAR(20), category VARCHAR(100), amount DECIMAL(15,2), member_id VARCHAR(50), description TEXT, timestamp DATETIME, verified_hash TEXT )`);
+        await conn.execute(`CREATE TABLE IF NOT EXISTS transactions ( id INT AUTO_INCREMENT PRIMARY KEY, receipt_id VARCHAR(100) UNIQUE, type VARCHAR(20), category VARCHAR(100), amount DECIMAL(15,2), member_id VARCHAR(50), description TEXT, timestamp DATETIME, verified_hash TEXT, proof_image LONGTEXT )`);
         await conn.execute(`CREATE TABLE IF NOT EXISTS distributions ( id INT AUTO_INCREMENT PRIMARY KEY, distribution_id VARCHAR(100) UNIQUE, member_id VARCHAR(50), amount DECIMAL(15,2), distribution_type VARCHAR(50), year INT, notes TEXT, received_date DATETIME )`);
         await conn.execute(`CREATE TABLE IF NOT EXISTS member_payments ( id INT AUTO_INCREMENT PRIMARY KEY, member_id VARCHAR(50), amount DECIMAL(15,2), month VARCHAR(20), status VARCHAR(20), paid_date DATETIME, transaction_id VARCHAR(100) )`);
         await conn.execute(`CREATE TABLE IF NOT EXISTS bills ( id INT AUTO_INCREMENT PRIMARY KEY, bill_type VARCHAR(100), description TEXT, amount DECIMAL(15,2), due_date VARCHAR(50), status VARCHAR(20), paid_date DATETIME, transaction_id VARCHAR(100) )`);
@@ -160,6 +160,14 @@ const SyncService = {
 
 async function initDatabase() {
     try {
+        // Ensure proof_image column exists in transactions
+        try {
+            sqliteDb.prepare("ALTER TABLE transactions ADD COLUMN proof_image TEXT").run();
+            console.log("✅ Added proof_image column to transactions table.");
+        } catch (err) {
+            // Column likely exists
+        }
+
         const nameRow = sqliteDb.prepare("SELECT value FROM settings WHERE key = 'mosque_name'").get();
         if (nameRow) mosqueName = nameRow.value;
 
@@ -202,7 +210,7 @@ const isAuthenticated = (roles) => {
  * Centrally manages transaction recording and security.
  * @returns {string} The receipt ID
  */
-async function recordTransaction(type, category, amount, member_id = null, description = '') {
+async function recordTransaction(type, category, amount, member_id = null, description = '', proof_image = null) {
     const timestamp = new Date().toISOString();
     const receipt_id = `REC-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
@@ -212,26 +220,31 @@ async function recordTransaction(type, category, amount, member_id = null, descr
     const verified_hash = crypto.createHash('sha256').update(hashPayload).digest('hex').substring(0, 16);
 
     const sql = `
-        INSERT INTO transactions (receipt_id, type, category, amount, member_id, description, verified_hash, timestamp, synced) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+        INSERT INTO transactions (receipt_id, type, category, amount, member_id, description, verified_hash, timestamp, proof_image, synced) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `;
 
-    const info = await dbManager.run(sql, [receipt_id, type, category, parseFloat(amount), member_id || null, description, verified_hash, timestamp]);
+    const info = await dbManager.run(sql, [receipt_id, type, category, parseFloat(amount), member_id || null, description, verified_hash, timestamp, proof_image]);
     console.log(`Transaction logged [${type.toUpperCase()}]: ${receipt_id} - Rs. ${amount}`);
     return { receipt_id, transaction_id: info.lastInsertRowid };
 }
 
 /**
- * Calculates months to check, ensuring current month is included on 1st day.
+ * Calculates months to check, ensuring current month is included.
+ * Returns [currentMonth, lastMonth, ...] reversed to be chronological.
  */
 function getPaymentMonths(limit = 6) {
     const months = [];
     const currentDate = new Date();
+    // Ensure we start from the current month
+    currentDate.setDate(1);
+
     for (let i = 0; i < limit; i++) {
-        const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+        const date = new Date(currentDate);
+        date.setMonth(currentDate.getMonth() - i);
         months.push(date.toISOString().substring(0, 7));
     }
-    return months.reverse(); // Chronological order
+    return months.reverse();
 }
 
 /**
@@ -438,7 +451,7 @@ const logoStorage = multer.diskStorage({
         cb(null, `mosque-logo-${Date.now()}${ext}`);
     }
 });
-const uploadLogo = multer({ storage: logoStorage });
+const uploadLogo = multer({ storage: multer.memoryStorage() }); // Store in memory to convert to base64
 
 app.post('/api/settings/logo', isAuthenticated(['super_admin']), uploadLogo.single('logo'), async (req, res) => {
     try {
@@ -446,13 +459,16 @@ app.post('/api/settings/logo', isAuthenticated(['super_admin']), uploadLogo.sing
             return res.status(400).json({ error: 'No file uploaded' });
         }
 
-        const logoPath = `/assets/logos/${req.file.filename}`;
+        // Convert buffer to base64
+        const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
 
-        const query = "INSERT OR REPLACE INTO settings (key, value, synced) VALUES (?, ?, 0)";
+        // Save to DB
+        await dbManager.run("INSERT OR REPLACE INTO settings (key, value, synced) VALUES (?, ?, 0)", ['logo_data', base64Image]);
 
-        await dbManager.run(query, ['logo_path', logoPath]);
+        // Also update path for backward compatibility if needed, but we prefer data URI now
+        // await dbManager.run("INSERT OR REPLACE INTO settings (key, value, synced) VALUES (?, ?, 0)", ['logo_path', base64Image]);
 
-        res.json({ success: true, logo_path: logoPath });
+        res.json({ success: true, logo_data: base64Image });
     } catch (err) {
         console.error('Logo upload error:', err);
         res.status(500).json({ error: 'Failed to upload logo' });
@@ -519,46 +535,106 @@ app.get('/api/members/:id/statement', isAuthenticated(['accountant', 'super_admi
 
 app.post('/api/members/import', isAuthenticated(['accountant', 'super_admin']), multer({ dest: 'uploads/' }).single('file'), async (req, res) => {
     try {
-        if (!req.file) {
-            const { csvData } = req.body;
-            if (csvData) {
-                const lines = csvData.trim().split('\n');
-                let success = 0;
-                for (let i = 1; i < lines.length; i++) {
-                    const [id, name, addr, cont] = lines[i].split(',').map(s => s?.trim());
-                    if (id && name) {
-                        const info = await dbManager.run('INSERT OR IGNORE INTO members (member_id, name, address, contact) VALUES (?, ?, ?, ?)', [id, name, addr || '', cont || '']);
-                        if (info.changes > 0) success++;
-                    }
+        let data = [];
+        let source = '';
+
+        // 1. Parse File or Raw Data
+        if (req.file) {
+            source = req.file.originalname;
+            const workbook = xlsx.readFile(req.file.path);
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            data = xlsx.utils.sheet_to_json(sheet);
+            fs.unlinkSync(req.file.path); // Cleanup
+        } else if (req.body.csvData) {
+            source = 'Paste Data';
+            const lines = req.body.csvData.trim().split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(s => s?.trim());
+                if (values.length === headers.length) {
+                    const row = {};
+                    headers.forEach((h, idx) => row[h] = values[idx]);
+                    data.push(row);
                 }
-                return res.json({ success, failed: lines.length - 1 - success });
             }
+        } else {
             return res.status(400).json({ error: 'No file or data provided' });
         }
 
-        const workbook = xlsx.readFile(req.file.path);
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const data = xlsx.utils.sheet_to_json(sheet);
+        // 2. Normalize Headers Helper
+        const normalize = (row) => {
+            const keys = Object.keys(row);
+            const norm = {};
+
+            // Heuristics for mapping
+            const findKey = (patterns) => keys.find(k => patterns.some(p => k.toLowerCase().includes(p)));
+
+            norm.id = row[findKey(['id', 'member_id', 'no'])]?.toString();
+            norm.name = row[findKey(['name', 'full name', 'member name'])];
+            norm.address = row[findKey(['address', 'location', 'residence'])] || '';
+            norm.contact = row[findKey(['contact', 'phone', 'mobile', 'tel'])] || '';
+
+            return norm;
+        };
+
+        // 3. Process Rows
         let success = 0;
+        let errors = [];
 
-        for (const row of data) {
-            const id = (row['ID'] || row['member_id'])?.toString();
-            const name = row['Name'] || row['name'];
-            const addr = row['Address'] || row['address'];
-            const cont = row['Contact'] || row['contact'];
+        // RE-IMPLEMENTING LOOP WITHOUT HUGE TRANSACTION TO ALLOW PARTIAL SUCCESS
+        for (let i = 0; i < data.length; i++) {
+            const rawRow = data[i];
+            const row = normalize(rawRow);
+            const rowNum = i + 2;
 
-            if (id && name) {
-                const info = await dbManager.run('INSERT OR IGNORE INTO members (member_id, name, address, contact, synced) VALUES (?, ?, ?, ?, 0)', [id, name, addr || '', cont || '']);
-                if (info.changes > 0) success++;
+            if (!row.name) {
+                errors.push({ row: rowNum, error: 'Missing Name', data: rawRow });
+                continue;
+            }
+            if (!row.id) {
+                errors.push({ row: rowNum, error: 'Missing Member ID', data: rawRow });
+                continue;
+            }
+
+            try {
+                // Check duplicate first to give nice error
+                const exists = await dbManager.get('SELECT 1 FROM members WHERE member_id = ?', [row.id]);
+                if (exists) {
+                    errors.push({ row: rowNum, error: `ID ${row.id} already exists`, data: rawRow });
+                    continue;
+                }
+
+                await dbManager.run(
+                    'INSERT INTO members (member_id, name, address, contact, synced) VALUES (?, ?, ?, ?, 0)',
+                    [row.id, row.name, row.address, row.contact]
+                );
+                success++;
+            } catch (err) {
+                errors.push({ row: rowNum, error: 'Database Error', data: rawRow });
             }
         }
 
-        fs.unlinkSync(req.file.path);
-        res.json({ success, failed: data.length - success });
+        res.json({ success, failed: errors.length, errors });
+
     } catch (err) {
         console.error('Import Error:', err);
-        res.status(500).json({ error: 'Import failed' });
+        res.status(500).json({ error: 'Import process failed: ' + err.message });
     }
+});
+
+// Template Download Route
+app.get('/api/members/import-template', (req, res) => {
+    const wb = xlsx.utils.book_new();
+    const ws = xlsx.utils.aoa_to_sheet([
+        ['Member ID', 'Full Name', 'Address', 'Contact Number'],
+        ['1001', 'John Doe', '123 Main St', '0771234567'],
+        ['1002', 'Jane Smith', '456 Mosque Rd', '0719876543']
+    ]);
+    xlsx.utils.book_append_sheet(wb, ws, "Template");
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=Member_Import_Template.xlsx');
+    res.send(buffer);
 });
 
 app.get('/api/members/export', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
@@ -643,11 +719,206 @@ app.get('/api/transactions', isAuthenticated(['accountant', 'super_admin']), asy
     res.json(transactions);
 });
 
+app.get('/api/transactions/export', isAuthenticated(['super_admin']), async (req, res) => {
+    try {
+        const sql = `
+            SELECT t.*, m.name as member_name 
+            FROM transactions t 
+            LEFT JOIN members m ON t.member_id = m.member_id 
+            ORDER BY timestamp DESC
+        `;
+        const transactions = await dbManager.query(sql);
+
+        // 1. Prepare Header Section
+        const header = [
+            [mosqueName.toUpperCase()],
+            ['FULL FINANCIAL AUDIT LOG'],
+            [`Exported on: ${new Date().toLocaleString()}`],
+            [''], // Spacer
+            ['Date', 'Receipt ID', 'Type', 'Category', 'Amount (Rs.)', 'Member', 'Description', 'Verified Hash', 'Has Proof']
+        ];
+
+        // 2. Prepare Data Rows
+        const dataRows = transactions.map(t => [
+            new Date(t.timestamp).toLocaleString(),
+            t.receipt_id,
+            t.type.toUpperCase(),
+            t.category.replace('_', ' ').toUpperCase(),
+            t.amount.toFixed(2),
+            t.member_name || t.member_id || 'N/A',
+            t.description,
+            t.verified_hash,
+            t.proof_image ? 'YES' : 'NO'
+        ]);
+
+        const wb = xlsx.utils.book_new();
+        const ws = xlsx.utils.aoa_to_sheet([...header, ...dataRows]);
+
+        // 3. Set Column Widths for better formatting
+        ws['!cols'] = [
+            { wch: 20 }, // Date
+            { wch: 25 }, // Receipt ID
+            { wch: 10 }, // Type
+            { wch: 20 }, // Category
+            { wch: 15 }, // Amount
+            { wch: 20 }, // Member
+            { wch: 40 }, // Description
+            { wch: 18 }, // Hash
+            { wch: 10 }  // Has Proof
+        ];
+
+        // 4. Add some merging for the header
+        ws['!merges'] = [
+            { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }, // Mosque Name
+            { s: { r: 1, c: 0 }, e: { r: 1, c: 8 } }, // Title
+            { s: { r: 2, c: 0 }, e: { r: 2, c: 8 } }  // Exported on
+        ];
+        xlsx.utils.book_append_sheet(wb, ws, "Audit Log");
+
+        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=Mosque_Audit_Report.xlsx');
+        res.send(buffer);
+    } catch (err) {
+        console.error('Audit Export Error:', err);
+        res.status(500).json({ error: 'Export failed' });
+    }
+});
+
+app.get('/api/transactions/export-visual', isAuthenticated(['super_admin']), async (req, res) => {
+    try {
+        const sql = `
+            SELECT t.*, m.name as member_name 
+            FROM transactions t 
+            LEFT JOIN members m ON t.member_id = m.member_id 
+            ORDER BY timestamp DESC
+        `;
+        const transactions = await dbManager.query(sql);
+        const settings = await dbManager.query('SELECT * FROM settings');
+        const settingsObj = {};
+        settings.forEach(s => settingsObj[s.key] = s.value);
+
+        const logoSrc = settingsObj.logo_data || settingsObj.logo_path || '/assets/img/logo.png';
+        const mosqueName = settingsObj.mosque_name || 'MOSQUE MANAGEMENT SYSTEM';
+
+        let html = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Visual Audit Report</title>
+                <style>
+                    body { font-family: sans-serif; padding: 20px; color: #000; }
+                    .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 20px; }
+                    .logo { height: 80px; width: 80px; object-fit: contain; }
+                    h1 { margin: 10px 0; }
+                    .transaction { page-break-inside: avoid; border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; display: flex; gap: 20px; }
+                    .details { flex: 1; }
+                    .proof { width: 300px; text-align: center; border-left: 1px solid #eee; padding-left: 20px; display: flex; flex-direction: column; justify-content: center; }
+                    .proof img { max-width: 100%; max-height: 200px; object-fit: contain; border: 1px solid #ddd; }
+                    .label { font-weight: bold; color: #666; font-size: 12px; }
+                    .value { font-size: 16px; margin-bottom: 8px; }
+                    .amount { font-size: 20px; font-weight: bold; color: #333; }
+                    .income { color: green; }
+                    .expense { color: red; }
+                    @media print {
+                        .no-print { display: none; }
+                        body { padding: 0; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="no-print" style="position: fixed; top: 10px; right: 10px; background: white; padding: 10px; border: 1px solid #ccc; box-shadow: 0 0 10px rgba(0,0,0,0.1);">
+                    <button onclick="window.print()" style="font-size: 16px; padding: 5px 15px; cursor: pointer;">🖨️ PRINT / SAVE AS PDF</button>
+                </div>
+                <div class="header">
+                    <img src="${logoSrc}" class="logo">
+                    <h1>${mosqueName}</h1>
+                    <h2>VISUAL FINANCIAL AUDIT REPORT</h2>
+                    <p>Generated on: ${new Date().toLocaleString()}</p>
+                </div>
+        `;
+
+        if (transactions.length === 0) {
+            html += '<p style="text-align: center; font-style: italic;">No transactions found.</p>';
+        } else {
+            transactions.forEach(t => {
+                const typeClass = t.type === 'income' ? 'income' : 'expense';
+                html += `
+                    <div class="transaction">
+                        <div class="details">
+                            <div class="label">RECEIPT ID</div>
+                            <div class="value">${t.receipt_id}</div>
+                            
+                            <div class="label">DATE</div>
+                            <div class="value">${new Date(t.timestamp).toLocaleString()}</div>
+                            
+                            <div class="label">TYPE / CATEGORY</div>
+                            <div class="value" style="text-transform: uppercase;">
+                                <strong class="${typeClass}">${t.type}</strong> - ${t.category.replace('_', ' ')}
+                            </div>
+                            
+                            <div class="label">MEMBER / PARTY</div>
+                            <div class="value">${t.member_name || t.member_id || (t.type === 'income' ? 'Anonymous' : 'External Party')}</div>
+                            
+                            <div class="label">DESCRIPTION</div>
+                            <div class="value">${t.description}</div>
+                            
+                            <div class="label">AMOUNT</div>
+                            <div class="value amount ${typeClass}">Rs. ${parseFloat(t.amount).toFixed(2)}</div>
+
+                            <div class="label" style="margin-top: 10px;">VERIFIED HASH</div>
+                            <div class="value" style="font-family: monospace; font-size: 12px; color: #888;">${t.verified_hash}</div>
+                        </div>
+                        <div class="proof">
+                            ${t.proof_image
+                        ? `<img src="${t.proof_image}"><p style="margin-top: 5px; font-size: 12px; color: #666;">Proof of Transaction</p>`
+                        : `<div style="padding: 20px; background: #f9f9f9; color: #aaa; font-style: italic;">No Digital Proof</div>`
+                    }
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        html += `
+                <div style="margin-top: 40px; text-align: center; font-size: 12px; color: #666; border-top: 1px solid #ccc; padding-top: 10px;">
+                    &copy; 2026 ShakBrotech | System by Shakeel Singalaxana
+                </div>
+            </body>
+            </html>
+        `;
+
+        res.send(html);
+    } catch (err) {
+        console.error('Visual Export Error:', err);
+        res.status(500).send('Failed to generate report');
+    }
+});
+
+app.get('/api/transactions/:id', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
+    try {
+        const transaction = await dbManager.get(
+            `SELECT t.*, m.name as member_name 
+             FROM transactions t 
+             LEFT JOIN members m ON t.member_id = m.member_id 
+             WHERE t.receipt_id = ?`,
+            [req.params.id]
+        );
+        if (transaction) {
+            res.json(transaction);
+        } else {
+            res.status(404).json({ error: 'Transaction not found' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch transaction' });
+    }
+});
+
 app.post('/api/transactions', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
-    const { type, category, amount, member_id, description } = req.body;
+    const { type, category, amount, member_id, description, proof_image } = req.body;
 
     try {
-        const { receipt_id } = await recordTransaction(type, category, amount, member_id, description);
+        const { receipt_id } = await recordTransaction(type, category, amount, member_id, description, proof_image);
         res.json({ success: true, receipt_id });
     } catch (err) {
         console.error('Database Error:', err);
@@ -702,69 +973,7 @@ app.get('/api/dashboard/stats', isAuthenticated(['accountant', 'super_admin']), 
     }
 });
 
-app.get('/api/transactions/export', isAuthenticated(['super_admin']), async (req, res) => {
-    try {
-        const sql = `
-            SELECT t.*, m.name as member_name 
-            FROM transactions t 
-            LEFT JOIN members m ON t.member_id = m.member_id 
-            ORDER BY timestamp DESC
-        `;
-        const transactions = await dbManager.query(sql);
 
-        // 1. Prepare Header Section
-        const header = [
-            [mosqueName.toUpperCase()],
-            ['FULL FINANCIAL AUDIT LOG'],
-            [`Exported on: ${new Date().toLocaleString()}`],
-            [''], // Spacer
-            ['Date', 'Receipt ID', 'Type', 'Category', 'Amount (Rs.)', 'Member', 'Description', 'Verified Hash']
-        ];
-
-        // 2. Prepare Data Rows
-        const dataRows = transactions.map(t => [
-            new Date(t.timestamp).toLocaleString(),
-            t.receipt_id,
-            t.type.toUpperCase(),
-            t.category.replace('_', ' ').toUpperCase(),
-            t.amount.toFixed(2),
-            t.member_name || t.member_id || 'N/A',
-            t.description,
-            t.verified_hash
-        ]);
-
-        const wb = xlsx.utils.book_new();
-        const ws = xlsx.utils.aoa_to_sheet([...header, ...dataRows]);
-
-        // 3. Set Column Widths for better formatting
-        ws['!cols'] = [
-            { wch: 20 }, // Date
-            { wch: 25 }, // Receipt ID
-            { wch: 10 }, // Type
-            { wch: 20 }, // Category
-            { wch: 15 }, // Amount
-            { wch: 20 }, // Member
-            { wch: 40 }, // Description
-            { wch: 18 }  // Hash
-        ];
-
-        // 4. Add some merging for the header
-        ws['!merges'] = [
-            { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, // Mosque Name
-            { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } }, // Title
-            { s: { r: 2, c: 0 }, e: { r: 2, c: 7 } }  // Exported on
-        ];
-        xlsx.utils.book_append_sheet(wb, ws, "Audit Log");
-
-        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', 'attachment; filename=Mosque_Audit_Report.xlsx');
-        res.send(buffer);
-    } catch (err) {
-        console.error('Audit Export Error:', err);
-        res.status(500).json({ error: 'Export failed' });
-    }
-});
 
 // --- MEMBER PAYMENTS APIs ---
 app.get('/api/member-payments', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
@@ -905,13 +1114,14 @@ app.post('/api/bills', isAuthenticated(['accountant', 'super_admin']), async (re
 
 app.put('/api/bills/:id/pay', isAuthenticated(['accountant', 'super_admin']), async (req, res) => {
     const { id } = req.params;
+    const { proof_image } = req.body; // Expect base64 image
 
     try {
         const bill = await dbManager.get('SELECT * FROM bills WHERE id = ?', [id]);
         if (!bill) return res.status(404).json({ error: 'Bill not found' });
 
         // FINANCIAL MISHAP FIX: Create transaction for bill payment
-        const { receipt_id } = await recordTransaction('expense', `bill_${bill.bill_type.toLowerCase()}`, bill.amount, null, `Paid Bill: ${bill.description}`);
+        const { receipt_id } = await recordTransaction('expense', `bill_${bill.bill_type.toLowerCase()}`, bill.amount, null, `Paid Bill: ${bill.description}`, proof_image);
 
         const sql = `
             UPDATE bills 
@@ -1047,9 +1257,9 @@ app.post('/api/database/merge', isAuthenticated(['super_admin']), uploadMerge.si
         const transactions = backupDb.prepare('SELECT * FROM transactions').all();
         for (const t of transactions) {
             await dbManager.run(`
-                INSERT OR IGNORE INTO transactions (receipt_id, type, category, amount, member_id, description, timestamp, verified_hash, synced)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-            `, [t.receipt_id, t.type, t.category, t.amount, t.member_id, t.description, t.timestamp, t.verified_hash]);
+                INSERT OR IGNORE INTO transactions (receipt_id, type, category, amount, member_id, description, timestamp, verified_hash, proof_image, synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            `, [t.receipt_id, t.type, t.category, t.amount, t.member_id, t.description, t.timestamp, t.verified_hash, t.proof_image]);
         }
 
         // 3. Member Payments

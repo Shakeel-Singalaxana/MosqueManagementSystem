@@ -19,8 +19,8 @@
 <body>
     <div class="login-container">
         <div class="login-box card">
-            <div style="text-align: center; margin-bottom: 20px;">
-                <img src="/assets/logo-placeholder.png" id="loginLogo"
+            <div class="logo-box" style="text-align: center; margin-bottom: 20px;">
+                <img src="/assets/logo-placeholder.png" alt="Mosque Logo" id="loginLogo"
                     style="height: 100px; width: 100px; object-fit: contain; margin-bottom: 10px;">
                 <h1 id="loginMosqueName"
                     style="margin: 0; font-size: 24px; line-height: 1.3; word-wrap: break-word; overflow-wrap: break-word;">
@@ -83,7 +83,7 @@
                 const res = await fetch('/api/settings');
                 const settings = await res.json();
                 if (settings.mosque_name) document.getElementById('loginMosqueName').innerText = settings.mosque_name;
-                document.getElementById('loginLogo').src = settings.logo_path || '/assets/img/logo.png';
+                document.getElementById('loginLogo').src = settings.logo_data || settings.logo_path || '/assets/img/logo.png';
             } catch (err) { console.error('Failed to load branding'); }
         }
         loadBranding();

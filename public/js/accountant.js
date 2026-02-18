@@ -160,7 +160,7 @@ async function generateStatement(memberId) {
         </head>
         <body onload="window.print()">
             <div class="statement-header">
-                <img src="${settings.logo_path || '/assets/img/logo.png'}" class="statement-logo">
+                <img src="${settings.logo_data || settings.logo_path || '/assets/img/logo.png'}" class="statement-logo">
                 <h2>${settings.mosque_name || 'MOSQUE MANAGEMENT SYSTEM'}</h2>
                 <p style="font-size: 14px; color: #666;">${settings.mosque_address || ''} ${settings.mosque_phone ? ' | Tel: ' + settings.mosque_phone : ''}</p>
             </div>
@@ -184,6 +184,7 @@ async function generateStatement(memberId) {
             <p style="margin-top: 30px; text-align: center;">Jazakallahu Khairan for your generosity.</p>
             <div class="developer-credits">
                 <p>&copy; 2026 ShakBrotech</p>
+                <p>System by Shakeel Singalaxana</p>
             </div>
         </body>
         </html>
@@ -322,14 +323,26 @@ async function renderReceipts() {
 
 async function saveTransaction(e) {
     e.preventDefault();
-    const payload = {
-        type: document.getElementById('t_type').value,
-        category: document.getElementById('t_category').value,
-        amount: parseFloat(document.getElementById('t_amount').value),
-        member_id: document.getElementById('t_member_id').value,
-        description: ''
-    };
+    const type = document.getElementById('t_type').value;
+    const category = document.getElementById('t_category').value;
+    const amount = parseFloat(document.getElementById('t_amount').value);
+    const member_id = document.getElementById('t_member_id').value;
+    const description = '';
 
+    const payload = { type, category, amount, member_id, description };
+
+    // If it's an expense, require camera proof
+    if (type === 'expense') {
+        openCameraModal(async (imageData) => {
+            payload.proof_image = imageData;
+            await submitTransaction(payload);
+        });
+    } else {
+        await submitTransaction(payload);
+    }
+}
+
+async function submitTransaction(payload) {
     try {
         const res = await fetch('/api/transactions', {
             method: 'POST',
@@ -348,165 +361,79 @@ async function saveTransaction(e) {
     }
 }
 
-async function printReceipt(receiptId) {
-    try {
-        const [transRes, setRes] = await Promise.all([
-            fetch('/api/transactions'),
-            fetch('/api/settings')
-        ]);
-        const logs = await transRes.json();
-        const settings = await setRes.json();
-        const l = logs.find(log => log.receipt_id === receiptId);
-
-        if (!l) {
-            alert('Receipt not found.');
-            return;
-        }
-
-        const printWin = window.open('', '', 'width=600,height=800');
-        if (!printWin) {
-            alert('Popup blocked! Please allow popups for this site to print receipts.');
-            return;
-        }
-
-        const isIncome = l.type === 'income';
-        const documentTitle = isIncome ? 'OFFICIAL RECEIPT' : 'PAYMENT VOUCHER';
-        const watermark = isIncome ? 'VERIFIED' : 'PAID';
-        const amountColor = isIncome ? '#2ecc71' : '#e74c3c';
-        const thankYouMessage = isIncome ? 'Jazakallahu Khairan for your generous contribution!' : 'Payment processed successfully.';
-
-        const headerHtml = getBrandedHeader(settings);
-        const footerHtml = getBrandedFooter(settings, isIncome ? 'OFFICIAL RECEIPT' : 'PAYMENT VOUCHER');
-
-        printWin.document.write(`
-            <html>
-            <head>
-                <title>${isIncome ? 'Receipt' : 'Bill'} - ${receiptId}</title>
-                <link rel="stylesheet" href="css/style.css">
-                <style>
-                    @page { margin: 0; }
-                    body { background: white; color: black; padding: 20px; text-align: center; font-family: sans-serif; margin: 0; }
-                    .receipt-box { 
-                        border: 4px solid ${isIncome ? '#2ecc71' : '#e74c3c'}; 
-                        padding: 20px; 
-                        position: relative; 
-                        margin: 0 auto; 
-                        max-width: 100%; 
-                    }
-                    .watermark { 
-                        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg);
-                        font-size: 60px; color: rgba(0,0,0,0.08); z-index: -1; pointer-events: none;
-                    }
-                    .receipt-header {
-                        margin-bottom: 20px;
-                        border-bottom: 3px solid ${isIncome ? '#2ecc71' : '#e74c3c'};
-                        padding-bottom: 10px;
-                    }
-                    .receipt-logo {
-                        height: 60px;
-                        width: 60px;
-                        object-fit: contain;
-                        margin-bottom: 10px;
-                    }
-                    .receipt-mosque-name {
-                        font-size: 22px;
-                        font-weight: bold;
-                        margin: 0;
-                        color: #000;
-                    }
-                    .receipt-mosque-details {
-                        font-size: 12px;
-                        color: #666;
-                        margin-top: 5px;
-                    }
-                    h1 { 
-                        margin: 5px 0; 
-                        color: ${isIncome ? '#2ecc71' : '#e74c3c'}; 
-                        font-size: 24px;
-                    }
-                    p { font-size: 14px; margin: 4px 0; }
-                    .amount-box { 
-                        font-size: 36px; 
-                        font-weight: bold; 
-                        margin: 15px 0; 
-                        padding: 15px; 
-                        border: 3px dashed ${amountColor}; 
-                        color: ${amountColor};
-                        background: ${isIncome ? 'rgba(46, 204, 113, 0.05)' : 'rgba(231, 76, 60, 0.05)'};
-                    }
-                    .category-label {
-                        background: ${isIncome ? '#2ecc71' : '#e74c3c'};
-                        color: white;
-                        padding: 5px 15px;
-                        border-radius: 15px;
-                        display: inline-block;
-                        margin: 5px 0;
-                        font-weight: bold;
-                        font-size: 12px;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="receipt-box">
-                    <div class="watermark">${watermark}</div>
-                    ${headerHtml}
-                    <h1>${documentTitle}</h1>
-                    <p><strong>${isIncome ? 'Receipt' : 'Voucher'} ID:</strong> ${l.receipt_id}</p>
-                    <p><strong>Date:</strong> ${new Date(l.timestamp).toLocaleString()}</p>
-                    <div class="amount-box">
-                        Rs. ${l.amount.toFixed(2)}
-                    </div>
-                    <div class="category-label">${l.category.replace('_', ' ').toUpperCase()}</div>
-                    <p style="margin-top: 20px;"><strong>${isIncome ? 'Received From' : 'Paid To'}:</strong> ${l.member_name || l.member_id || (isIncome ? 'Anonymous Donor' : 'Vendor/Payee')}</p>
-                    ${isIncome ? `<p><strong>Purpose:</strong> ${l.category.replace('_', ' ')}</p>` : `<p><strong>Expense Type:</strong> ${l.category.replace('_', ' ')}</p>`}
-                    <hr style="margin: 30px 0; border: 1px solid #ddd;">
-                    <p style="font-size: 14px; color: #666;">Verified Hash: ${l.verified_hash}</p>
-                    <p style="margin-top: 30px; font-weight: bold; font-size: 18px;">${thankYouMessage}</p>
-                    
-                    <div class="developer-credits">
-                        <p>&copy; 2026 ShakBrotech</p>
-                    </div>
-                    ${footerHtml}
-                </div>
-                <script>
-                    window.onload = function() {
-                        window.print();
-                        setTimeout(() => window.close(), 500);
-                    };
-                </script>
-            </body>
-            </html>
-        `);
-        printWin.document.close();
-    } catch (err) {
-        console.error(err);
-        alert('Error generating receipt.');
-    }
-}
 
 function showImportModal() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.xlsx, .xls, .csv';
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            const formData = new FormData();
-            formData.append('file', file);
-            try {
-                const res = await fetch('/api/members/import', {
-                    method: 'POST',
-                    body: formData
-                });
-                const result = await res.json();
-                alert(`Import Complete!\nSuccess: ${result.success}\nFailed: ${result.failed}`);
-                renderMembers();
-            } catch (err) {
-                alert('Import failed. Please ensure the file is a valid Excel or CSV.');
-            }
+    const modalHtml = `
+        <div id="importModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 9999; display: flex; align-items: center; justify-content: center;">
+            <div class="card" style="max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
+                <h2 style="color: var(--accent-color); margin-bottom: 20px;">Import Members</h2>
+                
+                <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <p style="margin: 0 0 10px 0;">1. Download the Excel template.</p>
+                    <button class="btn btn-primary" onclick="window.location.href='/api/members/import-template'">DOWNLOAD TEMPLATE</button>
+                    <p style="margin: 15px 0 10px 0;">2. Fill it with member data and upload.</p>
+                    <input type="file" id="importFile" accept=".xlsx, .xls, .csv">
+                </div>
+
+                <div id="importResults" style="display: none; margin-bottom: 20px;"></div>
+
+                <div class="flex gap-20">
+                    <button class="btn btn-success" onclick="processImport()" style="flex: 1;">START IMPORT</button>
+                    <button class="btn btn-danger" onclick="document.getElementById('importModal').remove()" style="flex: 1;">CLOSE</button>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+async function processImport() {
+    const fileInput = document.getElementById('importFile');
+    const resultDiv = document.getElementById('importResults');
+
+    if (!fileInput.files[0]) return alert('Please select a file.');
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<p>Processing... please wait.</p>';
+
+    try {
+        const res = await fetch('/api/members/import', {
+            method: 'POST',
+            body: formData
+        });
+        const result = await res.json();
+
+        if (result.error) {
+            resultDiv.innerHTML = `<p style="color: var(--danger-color)">Error: ${result.error}</p>`;
+            return;
         }
-    };
-    input.click();
+
+        let html = `
+            <div style="padding: 10px; border: 1px solid var(--success-color); background: rgba(46, 204, 113, 0.1); margin-bottom: 10px;">
+                <h3 style="color: var(--success-color); margin: 0;">Success: ${result.success} members added.</h3>
+            </div>
+        `;
+
+        if (result.failed > 0) {
+            html += `
+                <div style="padding: 10px; border: 1px solid var(--danger-color); background: rgba(231, 76, 60, 0.1);">
+                    <h3 style="color: var(--danger-color); margin: 0;">Failed: ${result.failed} rows</h3>
+                    <ul style="max-height: 150px; overflow-y: auto; margin-top: 10px; padding-left: 20px;">
+                        ${result.errors.map(e => `<li>Row ${e.row}: ${e.error}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        resultDiv.innerHTML = html;
+        if (result.success > 0) renderMembers();
+
+    } catch (err) {
+        resultDiv.innerHTML = `<p style="color: var(--danger-color)">Network Error</p>`;
+    }
 }
 
 async function exportMembers() {
@@ -597,6 +524,71 @@ function updateTransactionType() {
     typeField.value = expenseCategories.includes(category) ? 'expense' : 'income';
 }
 
+// --- PRINT FUNCTIONS ---
+async function printReceipt(id) {
+    try {
+        const [receiptRes, settingsRes] = await Promise.all([
+            fetch(`/api/transactions/${id}`),
+            fetch('/api/settings')
+        ]);
+        const r = await receiptRes.json();
+        const settings = await settingsRes.json();
+        const logoSrc = settings.logo_data || settings.logo_path || '/assets/logo-placeholder.png';
+
+        const printWindow = window.open('', '', 'width=400,height=600');
+        printWindow.document.write(`
+            <html>
+                <head>
+                    <title>Receipt - ${r.receipt_id}</title>
+                    <style>
+                        body { font-family: 'Courier New', monospace; padding: 20px; text-align: center; }
+                        .logo { width: 80px; height: 80px; object-fit: contain; margin-bottom: 10px; }
+                        .header { font-weight: bold; font-size: 18px; margin-bottom: 5px; }
+                        .sub-header { font-size: 12px; margin-bottom: 20px; }
+                        .line { border-top: 1px dashed #000; margin: 10px 0; }
+                        .row { display: flex; justify-content: space-between; margin: 5px 0; font-size: 14px; }
+                        .total { font-weight: bold; font-size: 16px; margin-top: 10px; }
+                        .footer { margin-top: 20px; font-size: 10px; }
+                    </style>
+                </head>
+                <body>
+                    <img src="${logoSrc}" class="logo">
+                    <div class="header">${settings.mosque_name || 'MOSQUE MANAGEMENT SYSTEM'}</div>
+                    <div class="sub-header">${settings.mosque_address || ''}<br>Tel: ${settings.mosque_phone || ''}</div>
+                    
+                    <div class="line"></div>
+                    <div style="font-weight:bold; margin-bottom:10px">OFFICIAL RECEIPT</div>
+                    
+                    <div class="row"><span>Date:</span><span>${new Date(r.timestamp).toLocaleString()}</span></div>
+                    <div class="row"><span>Receipt ID:</span><span>${r.receipt_id}</span></div>
+                    <div class="row"><span>Type:</span><span>${r.category.toUpperCase()}</span></div>
+                    ${r.member_name ? `<div class="row"><span>Member:</span><span>${r.member_name} (${r.member_id})</span></div>` : ''}
+                    
+                    <div class="line"></div>
+                    
+                    <div class="row" style="font-weight:bold">
+                        <span>AMOUNT</span>
+                        <span>Rs. ${parseFloat(r.amount).toFixed(2)}</span>
+                    </div>
+
+                    <div class="line"></div>
+                    <div style="text-align:left; font-size:12px; margin-bottom:20px;">
+                        <strong>Description:</strong><br>
+                        ${r.description || 'No description provided.'}
+                    </div>
+
+                    <div class="footer">
+                        Generated by MMS | ${r.verified_hash}<br>
+                        Jazakallah Khair
+                    </div>
+                </body>
+                <script>
+                    window.onload = function() { window.print(); window.close(); }
+                </script>
+            </html>
+        `);
+    } catch (e) { alert('Failed to generate receipt'); }
+}
 // Bills Management View
 async function renderBills() {
     try {
@@ -730,22 +722,23 @@ async function saveBill(e) {
 }
 
 async function payBill(billId) {
-    if (!confirm('Mark this bill as paid?')) return;
-
-    try {
-        const res = await fetch(`/api/bills/${billId}/pay`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-        });
-        const data = await res.json();
-        if (data.success) {
-            alert('Bill marked as paid!');
-            loadBillsList();
+    // Open camera modal directly instead of confirm
+    openCameraModal(async (imageData) => {
+        try {
+            const res = await fetch(`/api/bills/${billId}/pay`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ proof_image: imageData })
+            });
+            const data = await res.json();
+            if (data.success) {
+                alert('Bill marked as paid!');
+                loadBillsList();
+            }
+        } catch (err) {
+            alert('Error marking bill as paid');
         }
-    } catch (err) {
-        alert('Error marking bill as paid');
-    }
+    });
 }
 
 async function deleteBill(billId) {
@@ -1459,9 +1452,10 @@ function filterMembers() {
 
 // Helper Functions for Branding
 function getBrandedHeader(settings) {
+    const logoSrc = settings.logo_data || settings.logo_path || '/assets/logo-placeholder.png';
     return `
         <div class="branded-header" style="border-bottom: 3px solid #f1c40f; padding-bottom: 20px; margin-bottom: 30px; display: flex; align-items: center; justify-content: center; gap: 20px;">
-            <img src="${settings.logo_path || '/assets/img/logo.png'}" style="height: 80px; width: 80px; object-fit: contain;">
+            <img src="${logoSrc}" style="height: 80px; width: 80px; object-fit: contain;">
             <div style="text-align: left;">
                 <h1 style="margin: 0; font-size: 24px; color: #f1c40f; text-transform: uppercase;">${settings.mosque_name || 'MOSQUE MANAGEMENT SYSTEM'}</h1>
                 <div style="font-size: 12px; color: #666; margin-top: 5px;">
@@ -1477,82 +1471,109 @@ function getBrandedHeader(settings) {
 function getBrandedFooter(settings, docTitle) {
     return `
         <div class="branded-footer" style="position: fixed; bottom: 0; left: 0; right: 0; text-align: center; font-size: 10px; color: #666; padding: 5px; background: white; border-top: 1px solid #eee;">
-            &copy; ShakBrotech | ${docTitle.toUpperCase()}
+            &copy; ShakBrotech | ${docTitle.toUpperCase()} <br> System by Shakeel Singalaxana
         </div>
     `;
 }
 // Print barcode card for member
-function printBarcode(memberId, memberName, contact) {
-    const printWin = window.open('', '', 'width=600,height=400');
-    if (!printWin) {
-        alert('Popup blocked! Please allow popups for this site to print barcodes.');
-        return;
+async function printBarcode(memberId, memberName, contact) {
+    try {
+        const settingsRes = await fetch('/api/settings');
+        const settings = await settingsRes.json();
+        const logoSrc = settings.logo_data || settings.logo_path || '/assets/logo-placeholder.png';
+
+        const printWin = window.open('', '', 'width=600,height=400');
+        if (!printWin) {
+            alert('Popup blocked! Please allow popups for this site to print barcodes.');
+            return;
+        }
+
+        const footerHtml = getBrandedFooter(null, 'MEMBER BARCODE');
+
+        printWin.document.write(`
+            <html>
+            <head>
+                <title>Member Barcode - ${memberId}</title>
+                <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+                <style>
+                    @page { margin: 0; }
+                    body { 
+                        background: white; 
+                        color: black; 
+                        padding: 15px; 
+                        text-align: center; 
+                        font-family: sans-serif; 
+                        margin: 0;
+                    }
+                    .barcode-card { 
+                        border: 3px solid #000; 
+                        padding: 15px; 
+                        margin: 20px auto; 
+                        max-width: 400px;
+                        background: white;
+                    }
+                    h2 { 
+                        margin: 10px 0; 
+                        font-size: 24px;
+                        color: #000;
+                    }
+                    .logo-header {
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 15px;
+                        margin-bottom: 10px;
+                    }
+                    .logo-header img {
+                        height: 50px;
+                        width: 50px;
+                        object-fit: contain;
+                    }
+                    p { 
+                        font-size: 16px; 
+                        margin: 8px 0; 
+                    }
+                    svg {
+                        margin: 10px 0;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="barcode-card">
+                    <div class="logo-header">
+                        <img src="${logoSrc}">
+                        <h2>${settings.mosque_name || 'MOSQUE'}</h2>
+                    </div>
+                    <div style="font-size: 14px; font-weight: bold; margin-bottom: 5px;">MEMBER CARD</div>
+                    <svg id="barcode"></svg>
+                    <p><strong>ID:</strong> ${memberId}</p>
+                    <p><strong>Name:</strong> ${memberName}</p>
+                    <p><strong>Contact:</strong> ${contact}</p>
+                </div>
+                <script>
+                    JsBarcode("#barcode", "${memberId}", {
+                        format: "CODE128",
+                        width: 2,
+                        height: 60,
+                        displayValue: false,
+                        fontSize: 18,
+                        margin: 10
+                    });
+                    
+                    window.onload = function() {
+                        window.print();
+                        setTimeout(() => window.close(), 500);
+                    };
+                </script>
+                ${footerHtml}
+            </body>
+            </html>
+        `);
+        printWin.document.close();
+    } catch (e) {
+        console.error(e);
+        alert('Failed to load settings for print');
     }
-
-    const footerHtml = getBrandedFooter(null, 'MEMBER BARCODE');
-
-    printWin.document.write(`
-        <html>
-        <head>
-            <title>Member Barcode - ${memberId}</title>
-            <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
-            <style>
-                @page { margin: 0; }
-                body { 
-                    background: white; 
-                    color: black; 
-                    padding: 15px; 
-                    text-align: center; 
-                    font-family: sans-serif; 
-                    margin: 0;
-                }
-                .barcode-card { 
-                    border: 3px solid #000; 
-                    padding: 15px; 
-                    margin: 20px auto; 
-                    max-width: 400px;
-                    background: white;
-                }
-                h2 { 
-                    margin: 10px 0; 
-                    font-size: 24px;
-                }
-                p { 
-                    font-size: 16px; 
-                    margin: 8px 0; 
-                }
-                svg {
-                    margin: 20px 0;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="barcode-card">
-                <h2>MOSQUE MEMBER CARD</h2>
-                <svg id="barcode"></svg>
-                <p><strong>ID:</strong> ${memberId}</p>
-                <p><strong>Name:</strong> ${memberName}</p>
-                <p><strong>Contact:</strong> ${contact}</p>
-            </div>
-            <script>
-                JsBarcode("#barcode", "${memberId}", {
-                    format: "CODE128",
-                    width: 2,
-                    height: 80,
-                    displayValue: true,
-                    fontSize: 18,
-                    margin: 10
-                });
-                
-                window.onload = function() {
-                    window.print();
-                    setTimeout(() => window.close(), 500);
-                };
-            </script>
-        </body>
-        </html>
-    `);
-    printWin.document.close();
 }
 
 async function logout() {
@@ -1684,4 +1705,107 @@ async function changePassword() {
             alert('Error: ' + data.error);
         }
     } catch (err) { alert('Request failed.'); }
+}
+
+// --- CAMERA MODAL & CAPTURE LOGIC ---
+let videoStream = null;
+
+function openCameraModal(onConfirm) {
+    const modalHtml = `
+        <div id="cameraModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 10000; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+            <div class="card" style="width: 90%; max-width: 600px; text-align: center; padding: 20px;">
+                <h2 style="color: var(--accent-color);">Capture Proof of Payment</h2>
+                <div style="position: relative; width: 100%; height: 300px; background: #000; margin-bottom: 20px;">
+                    <video id="cameraVideo" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
+                    <canvas id="cameraCanvas" style="display: none; width: 100%; height: 100%; object-fit: cover;"></canvas>
+                    <img id="cameraPreview" style="display: none; width: 100%; height: 100%; object-fit: cover;" />
+                </div>
+                
+                <div id="cameraControls">
+                    <button id="captureBtn" class="btn btn-success" style="font-size: 18px; padding: 10px 30px;">CAPTURE IMAGE</button>
+                    <button id="cancelBtn" class="btn btn-danger" style="font-size: 18px; padding: 10px 30px;">CANCEL</button>
+                </div>
+
+                <div id="previewControls" style="display: none;">
+                    <button id="retakeBtn" class="btn btn-primary" style="font-size: 18px; padding: 10px 30px;">RETAKE</button>
+                    <button id="confirmBtn" class="btn btn-success" style="font-size: 18px; padding: 10px 30px;">CONFIRM & SAVE</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    const video = document.getElementById('cameraVideo');
+    const canvas = document.getElementById('cameraCanvas');
+    const preview = document.getElementById('cameraPreview');
+    const captureBtn = document.getElementById('captureBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const retakeBtn = document.getElementById('retakeBtn');
+    const confirmBtn = document.getElementById('confirmBtn');
+    const cameraControls = document.getElementById('cameraControls');
+    const previewControls = document.getElementById('previewControls');
+
+    // Start Camera
+    async function startCamera() {
+        try {
+            videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            video.srcObject = videoStream;
+        } catch (err) {
+            console.error(err);
+            alert('Could not access camera. Please allow camera permissions.');
+            closeCameraModal();
+        }
+    }
+
+    startCamera();
+
+    // Capture Image
+    captureBtn.onclick = () => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        const imageData = canvas.toDataURL('image/jpeg', 0.8);
+
+        preview.src = imageData;
+        video.style.display = 'none';
+        preview.style.display = 'block';
+
+        if (videoStream) {
+            videoStream.getTracks().forEach(track => track.stop());
+        }
+
+        cameraControls.style.display = 'none';
+        previewControls.style.display = 'block';
+    };
+
+    // Retake Image
+    retakeBtn.onclick = () => {
+        preview.style.display = 'none';
+        video.style.display = 'block';
+        cameraControls.style.display = 'block';
+        previewControls.style.display = 'none';
+        startCamera();
+    };
+
+    // Confirm Logic
+    confirmBtn.onclick = () => {
+        const imageData = preview.src;
+        closeCameraModal();
+        if (onConfirm) onConfirm(imageData);
+    };
+
+    // Cancel Logic
+    cancelBtn.onclick = closeCameraModal;
+}
+
+function closeCameraModal() {
+    const modal = document.getElementById('cameraModal');
+    if (modal) {
+        modal.remove();
+    }
+    if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+        videoStream = null;
+    }
 }

@@ -14,8 +14,14 @@ title Mosque Management System - Launcher
 echo [+] Starting Mosque Management System...
 cd /d "%~dp0"
 
-:: TIP: To sync updates from GitHub when you're ready, you can add 
-:: "git pull origin main" as the first command after '@echo off'.
+echo [+] Checking for updates from GitHub...
+where git >nul 2>nul
+if %errorlevel% equ 0 (
+    git pull origin main
+    echo [+] Git found. updating code...
+) else (
+    echo [!] Git not found. Skipping auto-update.
+)
 
 echo [+] Checking for system updates (npm install)...
 call npm install --no-fund --no-audit

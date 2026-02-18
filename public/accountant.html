@@ -154,6 +154,23 @@
 
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
     <script src="js/accountant.js"></script>
+    <script>
+        // Inline script to handle header updates similar to admin.html
+        async function updateHeader() {
+            try {
+                const res = await fetch('/api/settings');
+                const s = await res.json();
+                if (s.mosque_name) document.getElementById('headerMosqueName').innerText = s.mosque_name;
+                document.getElementById('headerLogo').src = s.logo_data || s.logo_path || '/assets/logo-placeholder.png';
+
+                const details = [];
+                if (s.mosque_phone) details.push(`Tel: ${s.mosque_phone}`);
+                if (s.mosque_address) details.push(s.mosque_address);
+                document.getElementById('headerDetails').innerText = details.join(' | ');
+            } catch (e) { console.error('Header update failed', e); }
+        }
+        updateHeader();
+    </script>
 </body>
 
 </html>

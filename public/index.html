@@ -203,7 +203,7 @@
                 const res = await fetch('/api/settings');
                 const s = await res.json();
                 if (s.mosque_name) document.getElementById('mosqueName').innerText = s.mosque_name;
-                document.getElementById('mosqueLogo').src = s.logo_path || '/assets/img/logo.png';
+                document.getElementById('mosqueLogo').src = s.logo_data || s.logo_path || '/assets/img/logo.png';
                 if (s.mosque_address || s.mosque_phone) {
                     const details = [];
                     if (s.mosque_phone) details.push(`Tel: ${s.mosque_phone}`);
