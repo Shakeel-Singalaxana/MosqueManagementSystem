@@ -18,23 +18,25 @@ A Management software for your mosque
 
 
 
-⭕ If not using a windows system run these commands in a terminal within the directory 
+⭕ If not using a windows system run these commands in a terminal within the directory
 
-&nbsp;	
+ 
 
-&nbsp;	💠 git pull origin main (to update the codebase)
+ 	💠 git pull origin main (to update the codebase)
 
-&nbsp;	💠 call npm install --no-fund --no-audit (to update the system)
+ 	💠 call npm install --no-fund --no-audit (to update the system)
 
-&nbsp;	💠 node database/init.js (to initialize the database)
+ 	💠 node database/init.js (to initialize the database)
 
-&nbsp;	💠 start /min "MMS Server" npm start (to start the server)
+ 	💠 start /min "MMS Server" npm start (to start the server)
 
-&nbsp;	💠 visit http://localhost:3000 via a web browser
+ 	💠 visit http://localhost:3000 via a web browser
 
 
 
 ⭕ Report any issues found.
+
+
 
 
 
