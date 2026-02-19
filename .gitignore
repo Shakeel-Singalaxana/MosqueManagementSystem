@@ -8,16 +8,36 @@ MMS_Launcher.bat
 data/mms.sqlite
 /data
 
-# Dependency folders
+# --- Dependencies ---
+# Never upload node_modules; users should run 'npm install' instead
 node_modules/
 
-# Database files (Private data)
+# --- Database & Private Data ---
+# Keep your actual database and local data private
 data/*.sqlite
 data/*.sqlite-journal
+data/*.db
 
-# Environment variables
+# --- Environment Secrets ---
+# Protect your session keys and private configs
 .env
 
-# OS files
+# --- Logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# --- OS Specific Files ---
 .DS_Store
+.DS_Store?
+_MACOSX/
 Thumbs.db
+ehthumbs.db
+
+# --- IDE/Editor Configs ---
+.vscode/
+.idea/
+*.swp
+*.swo
