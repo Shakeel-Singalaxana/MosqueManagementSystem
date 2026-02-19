@@ -7,3 +7,17 @@ data/mms.sqlite
 MMS_Launcher.bat
 data/mms.sqlite
 /data
+
+# Dependency folders
+node_modules/
+
+# Database files (Private data)
+data/*.sqlite
+data/*.sqlite-journal
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
