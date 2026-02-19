@@ -45,6 +45,7 @@ The system will be live at: http://localhost:3000
 
 🤝 Contributing
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
 📄 License
 MIT License
 Copyright (c) 2026 Shakbrotech
